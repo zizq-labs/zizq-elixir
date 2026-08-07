@@ -1,0 +1,306 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: write
+
+env:
+  # Elixir/OTP pair used by every job that isn't the version matrix.
+  ELIXIR_VERSION: "1.20"
+  OTP_VERSION: "29"
+
+jobs:
+  check:
+    name: Check
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Set up BEAM
+        id: beam
+        uses: erlef/setup-beam@v1
+        with:
+          elixir-version: ${{ env.ELIXIR_VERSION }}
+          otp-version: ${{ env.OTP_VERSION }}
+
+      # Keyed on the versions setup-beam actually resolved, not the
+      # ones requested. `1.20` resolves to whatever 1.20.x is current,
+      # so a key built from the request would happily restore a `_build`
+      # compiled by a different compiler.
+      - name: Cache deps + build
+        uses: actions/cache@v6
+        with:
+          path: |
+            deps
+            _build
+          key: ${{ runner.os }}-mix-check-${{ steps.beam.outputs.elixir-version }}-${{ steps.beam.outputs.otp-version }}-${{ hashFiles('mix.exs', 'mix.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-mix-check-${{ steps.beam.outputs.elixir-version }}-${{ steps.beam.outputs.otp-version }}-
+
+      - name: Fetch dependencies
+        run: mix deps.get
+
+      - name: mix format --check-formatted
+        run: mix format --check-formatted
+
+      # Warnings are errors in CI only, so local development isn't
+      # blocked by warnings-in-progress. `--force` so a restored
+      # `_build` cache can't hide a warning by skipping recompilation.
+      - name: Compile (warnings as errors)
+        run: mix compile --force --warnings-as-errors
+
+  test:
+    name: Test (Elixir ${{ matrix.elixir }} / OTP ${{ matrix.otp }})
+    needs: check
+    runs-on: ubuntu-latest
+    # Only the floating row tolerates failure. A failed matrix leg with
+    # continue-on-error counts as success for jobs that `need` this one,
+    # so `gate` still fails on any pinned row while the floating row is
+    # advisory. Usually a footgun; here it is exactly the behaviour we
+    # want.
+    continue-on-error: ${{ matrix.experimental }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # Floor — the oldest pair mix.exs claims to support.
+          - elixir: "1.18"
+            otp: "27"
+            experimental: false
+          - elixir: "1.19"
+            otp: "28"
+            experimental: false
+          # Current — matches local development.
+          - elixir: "1.20"
+            otp: "29"
+            experimental: false
+          # Floats to the newest stable release, so a new Elixir or OTP
+          # surfaces here rather than the next time someone thinks to
+          # check. Advisory only: an upstream regression, or a new OTP
+          # major landing before Elixir supports it, must not block
+          # merges.
+          #
+          # Deliberately NOT `latest`: per setup-beam, ranges like `1.x`
+          # exclude pre-releases while `latest` opts *into* them, which
+          # would pull release candidates. Every other job pins
+          # ELIXIR_VERSION/OTP_VERSION so builds and publishes stay
+          # reproducible; only this row floats.
+          - elixir: "1.x"
+            otp: ">=27"
+            experimental: true
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Set up BEAM
+        id: beam
+        uses: erlef/setup-beam@v1
+        with:
+          elixir-version: ${{ matrix.elixir }}
+          otp-version: ${{ matrix.otp }}
+
+      # Keyed on the resolved versions rather than the requested ones,
+      # which matters most for the floating row: `1.x` never changes as
+      # a key, but what it resolves to does.
+      - name: Cache deps + build
+        uses: actions/cache@v6
+        with:
+          path: |
+            deps
+            _build
+          key: ${{ runner.os }}-mix-test-${{ steps.beam.outputs.elixir-version }}-${{ steps.beam.outputs.otp-version }}-${{ hashFiles('mix.exs', 'mix.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-mix-test-${{ steps.beam.outputs.elixir-version }}-${{ steps.beam.outputs.otp-version }}-
+
+      - name: Versions
+        run: elixir --version
+
+      - name: Fetch dependencies
+        run: mix deps.get
+
+      - name: Test
+        run: mix test
+
+  package:
+    name: Package
+    needs: check
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+      major: ${{ steps.version.outputs.major }}
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Set up BEAM
+        uses: erlef/setup-beam@v1
+        with:
+          elixir-version: ${{ env.ELIXIR_VERSION }}
+          otp-version: ${{ env.OTP_VERSION }}
+
+      # Read from the same `@version` line `release.sh` and
+      # `bump-version.sh` use, so all three agree by construction.
+      - name: Read version
+        id: version
+        run: |
+          version="$(sed -n 's/^[[:space:]]*@version "\(.*\)"/\1/p' mix.exs | head -1)"
+          echo "version=${version}" >> "$GITHUB_OUTPUT"
+          echo "major=${version%%.*}" >> "$GITHUB_OUTPUT"
+
+      - name: Build release artifact
+        run: ./release.sh
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v7
+        with:
+          name: zizq-elixir-package
+          path: |
+            _build/release/zizq-${{ steps.version.outputs.version }}.tar
+            _build/release/zizq-${{ steps.version.outputs.version }}.tar.sha256
+
+  # --- Integration ---
+  # Runs the packaged Hex tarball against a real Zizq server: downloads
+  # a compatible server build from the zizq-labs/zizq repo (via
+  # CROSS_REPO_TOKEN), pulls the packaged client from the
+  # zizq-elixir-package artifact, and runs the suite against the pair.
+
+  integration:
+    name: Integration
+    needs: package
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          path: client
+
+      - name: Set up BEAM
+        uses: erlef/setup-beam@v1
+        with:
+          elixir-version: ${{ env.ELIXIR_VERSION }}
+          otp-version: ${{ env.OTP_VERSION }}
+
+      # Selects the newest server build sharing the client's major.
+      # Correct because a client supports its target MAJOR.MINOR and
+      # anything newer within that major — the smoke test asserts it.
+      - name: Find and download latest compatible server build
+        env:
+          GH_TOKEN: ${{ secrets.CROSS_REPO_TOKEN }}
+        run: |
+          client/.github/scripts/find-server-build.sh \
+            ${{ needs.package.outputs.major }} \
+            server
+
+      - name: Download client artifact
+        uses: actions/download-artifact@v8
+        with:
+          name: zizq-elixir-package
+          path: artifact
+
+      - name: Run integration tests
+        working-directory: client
+        env:
+          ZIZQ_LICENSE_KEY: ${{ secrets.ZIZQ_LICENSE_KEY }}
+        run: |
+          ARGS=(
+            --binary ${{ github.workspace }}/server/zizq
+            --tarball ${{ github.workspace }}/artifact/zizq-${{ needs.package.outputs.version }}.tar
+          )
+          if [[ -n "$ZIZQ_LICENSE_KEY" ]]; then
+            ARGS+=(--license-key "$ZIZQ_LICENSE_KEY")
+          fi
+          ./integration/run.sh "${ARGS[@]}"
+
+  # --- Gate (stable check name for branch protection) ---
+
+  gate:
+    name: Gate
+    runs-on: ubuntu-latest
+    needs: [test, integration]
+    if: always()
+    steps:
+      - run: |
+          if [ "${{ needs.test.result }}" != "success" ] || \
+             [ "${{ needs.integration.result }}" != "success" ]; then
+            echo "Required checks failed or were skipped."
+            echo "  Test: ${{ needs.test.result }}"
+            echo "  Integration: ${{ needs.integration.result }}"
+            exit 1
+          fi
+
+  # --- Publish (main only, requires approval) ---
+
+  publish:
+    name: Publish Release
+    needs: [gate, package]
+    if: github.ref == 'refs/heads/main' && github.event_name == 'push'
+    environment: release
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Set up BEAM
+        uses: erlef/setup-beam@v1
+        with:
+          elixir-version: ${{ env.ELIXIR_VERSION }}
+          otp-version: ${{ env.OTP_VERSION }}
+
+      - name: Download package artifact
+        uses: actions/download-artifact@v8
+        with:
+          name: zizq-elixir-package
+          path: artifacts
+
+      # `mix hex.publish` builds from this checkout rather than taking a
+      # tarball path, so rebuild here and prove the result is identical
+      # to the artifact the integration job actually tested. Hex
+      # tarballs are reproducible (internal timestamps are pinned), so
+      # any difference means the tree changed between jobs.
+      - name: Verify the publishable tarball matches what CI tested
+        run: |
+          version=${{ needs.package.outputs.version }}
+          ./release.sh
+          built="$(shasum -a 256 "_build/release/zizq-${version}.tar" | cut -d' ' -f1)"
+          tested="$(cut -d' ' -f1 < "artifacts/zizq-${version}.tar.sha256")"
+          if [ "$built" != "$tested" ]; then
+            echo "::error::Rebuilt tarball does not match the tested artifact."
+            echo "  tested: ${tested}"
+            echo "  built:  ${built}"
+            exit 1
+          fi
+          echo "Checksums match: ${built}"
+
+      # The irreversible step, so it runs before the GitHub Release
+      # below — a failure then leaves nothing else half-done. Hex allows
+      # a revert only within one hour of publishing.
+      #
+      # `hex.publish package` publishes the package without docs; docs
+      # need ExDoc, which arrives with the documentation commit. Swap to
+      # plain `hex.publish` then.
+      - name: Publish to Hex
+        env:
+          HEX_API_KEY: ${{ secrets.HEX_API_KEY }}
+        run: mix hex.publish package --yes
+
+      # Exact heading match. A `sed` range address would prefix-match
+      # (`## 0.6.0` also matches `## 0.6.0-alpha.2`) *and* restart on
+      # every later match, concatenating several sections into one set
+      # of release notes.
+      - name: Extract release notes from CHANGELOG
+        run: |
+          version=${{ needs.package.outputs.version }}
+          awk -v v="## $version" '$0 == v {f=1; next} /^## / && f {exit} f' \
+            CHANGELOG.md > release-notes.md
+
+      - name: Create GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          version=${{ needs.package.outputs.version }}
+          gh release create "v${version}" \
+            --title "v${version}" \
+            --notes-file release-notes.md \
+            "artifacts/zizq-${version}.tar" \
+            "artifacts/zizq-${version}.tar.sha256"

@@ -230,7 +230,7 @@ To run the integration suite against a real server binary:
 ```bash
 ./integration/run.sh \
   --binary /path/to/zizq \
-  --tarball zizq-0.6.0-alpha.1.tar
+  --tarball _build/release/zizq-<version>.tar
 ```
 
 ## Resources

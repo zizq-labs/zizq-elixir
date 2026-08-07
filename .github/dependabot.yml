@@ -1,0 +1,39 @@
+# Dependabot version updates for the Elixir client.
+# Security advisories + Dependabot alerts are configured separately
+# in Settings -> Code security and analysis.
+#
+# Strategy: weekly grouped patch+minor PRs, `versioning-strategy:
+# lockfile-only` so the requirements in mix.exs don't get auto-bumped —
+# only mix.lock moves, keeping dev/CI on the latest resolved versions.
+# Public-facing `deps` constraints stay stable for Hex consumers, whose
+# `~>` requirements already accept future patch/minor releases.
+version: 2
+updates:
+  - package-ecosystem: "mix"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+    open-pull-requests-limit: 10
+    commit-message:
+      prefix: "deps"
+    versioning-strategy: "lockfile-only"
+    groups:
+      mix-patch-minor:
+        update-types:
+          - "patch"
+          - "minor"
+
+  - package-ecosystem: "github-actions"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+    open-pull-requests-limit: 10
+    commit-message:
+      prefix: "ci"
+    groups:
+      actions-patch-minor:
+        update-types:
+          - "patch"
+          - "minor"

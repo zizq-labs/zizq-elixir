@@ -1,0 +1,5 @@
+#!/usr/bin/env bash
+set -e
+
+mix format
+git diff --cached --name-only --diff-filter=d -- '*.ex' '*.exs' | xargs -r git add

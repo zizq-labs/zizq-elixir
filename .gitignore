@@ -1,0 +1,22 @@
+# Mix artefacts
+/_build/
+/cover/
+/deps/
+/doc/
+/.fetch
+*.ez
+erl_crash.dump
+
+# Packaged release artefacts (see release.sh)
+/*.tar
+/*.tar.sha256
+
+# Language server / editor caches
+/.elixir_ls/
+/.lexical/
+
+# Integration harness — a separate Mix project, built against the
+# packaged tarball rather than this source tree.
+/integration/_build/
+/integration/deps/
+/integration/mix.lock

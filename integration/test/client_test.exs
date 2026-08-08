@@ -66,8 +66,10 @@ defmodule Zizq.Integration.ClientTest do
         result
       end)
 
-    assert {:error, error} = result
-    assert Exception.message(error) =~ ~r/\S/
+    assert {:error, %Zizq.Error{reason: :transport} = error} = result
+    assert Exception.message(error) =~ "could not reach the Zizq server"
+    # Transport failures are transient, so the worker will retry them.
+    assert Zizq.Error.retryable?(error)
 
     # Assert the warning happens, rather than merely tolerating it: it
     # is the operator's only signal that enqueues are failing for an

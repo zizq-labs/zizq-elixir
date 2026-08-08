@@ -8,7 +8,7 @@ defmodule Zizq.HTTP do
 
   alias Zizq.Config
 
-  @type response :: {:ok, non_neg_integer(), term()} | {:error, Exception.t()}
+  @type response :: {:ok, non_neg_integer(), term()} | {:error, Zizq.Error.t()}
 
   # Finch's HTTP/2 pool registers itself only once its connection is
   # established, and `Finch.request/3` does not wait for that: a
@@ -40,8 +40,12 @@ defmodule Zizq.HTTP do
 
   Returns `{:ok, status, decoded_body}` for any HTTP response,
   including 4xx and 5xx; interpreting status codes is the caller's
-  job. `{:error, exception}` covers transport failures and bodies that
-  could not be encoded or decoded.
+  job, because status alone is not always decisive (a 422 from bulk
+  acknowledge reports partial success, not failure).
+
+  `{:error, %Zizq.Error{}}` covers only the cases where there is no
+  response to interpret: transport failures, and bodies that could not
+  be encoded or decoded.
   """
   @spec request(Config.t(), atom(), String.t(), term() | nil) :: response()
   def request(%Config{} = config, method, path, body \\ nil) do
@@ -91,7 +95,7 @@ defmodule Zizq.HTTP do
         {:ok, headers, iodata}
 
       {:error, exception} ->
-        {:error, exception}
+        {:error, Zizq.Error.encode(exception)}
     end
   end
 
@@ -104,11 +108,12 @@ defmodule Zizq.HTTP do
 
     case codec.decode(resp.body) do
       {:ok, decoded} -> {:ok, resp.status, decoded}
-      {:error, exception} -> {:error, exception}
+      {:error, exception} -> {:error, Zizq.Error.decode(exception)}
     end
   end
 
-  defp decode_response({:error, exception}, _config), do: {:error, exception}
+  defp decode_response({:error, exception}, _config),
+    do: {:error, Zizq.Error.transport(exception)}
 
   # Trust the response's own content-type when we recognise it, so a
   # server that answers in a different format than requested still

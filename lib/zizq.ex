@@ -121,14 +121,14 @@ defmodule Zizq do
       #=> {:ok, "0.6.1"}
 
   """
-  @spec server_version(atom()) :: {:ok, String.t()} | {:error, term()}
+  @spec server_version(atom()) :: {:ok, String.t()} | {:error, Zizq.Error.t()}
   def server_version(name) when is_atom(name) do
     config = Config.fetch!(name)
 
     case Zizq.HTTP.request(config, :get, "/version") do
       {:ok, 200, %{"version" => version}} -> {:ok, version}
-      {:ok, status, body} -> {:error, {:unexpected_response, status, body}}
-      {:error, exception} -> {:error, exception}
+      {:ok, status, body} -> {:error, Zizq.Error.from_response(status, body)}
+      {:error, %Zizq.Error{} = error} -> {:error, error}
     end
   end
 end

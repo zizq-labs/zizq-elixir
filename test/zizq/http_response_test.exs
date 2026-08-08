@@ -114,8 +114,11 @@ defmodule Zizq.HTTPResponseTest do
           format: :json
         )
 
-      assert {:error, exception} = request(name)
-      assert Exception.message(exception) =~ ~r/\S/
+      assert {:error, %Zizq.Error{reason: :decode} = error} = request(name)
+      # The underlying codec exception is kept, so the real cause is
+      # not lost behind our wrapper.
+      assert error.cause
+      assert Exception.message(error) =~ "could not decode the response body"
     end
 
     test "returns an exception when the body cannot be encoded" do
@@ -124,8 +127,11 @@ defmodule Zizq.HTTPResponseTest do
           format: :json
         )
 
-      assert {:error, exception} = request(name, :post, "/jobs", %{"bad" => <<0xFF>>})
-      assert Exception.message(exception) =~ "invalid_byte"
+      assert {:error, %Zizq.Error{reason: :encode} = error} =
+               request(name, :post, "/jobs", %{"bad" => <<0xFF>>})
+
+      assert Exception.message(error) =~ "could not encode the request body"
+      assert Exception.message(error) =~ "invalid_byte"
     end
   end
 

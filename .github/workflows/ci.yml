@@ -141,6 +141,12 @@ jobs:
           elixir-version: ${{ env.ELIXIR_VERSION }}
           otp-version: ${{ env.OTP_VERSION }}
 
+      # `mix hex.build` does not itself need dependencies fetched, but
+      # relying on that is fragile — and the publish job below does
+      # need them. Fetch in both so the two stay in step.
+      - name: Fetch dependencies
+        run: mix deps.get
+
       # Read from the same `@version` line `release.sh` and
       # `bump-version.sh` use, so all three agree by construction.
       - name: Read version
@@ -246,6 +252,12 @@ jobs:
         with:
           elixir-version: ${{ env.ELIXIR_VERSION }}
           otp-version: ${{ env.OTP_VERSION }}
+
+      # `mix hex.publish` verifies the dependency tree before uploading,
+      # so it fails outright without this — unlike `mix hex.build`,
+      # which the package job gets away with.
+      - name: Fetch dependencies
+        run: mix deps.get
 
       - name: Download package artifact
         uses: actions/download-artifact@v8

@@ -7,6 +7,8 @@ not on Redis, and not on your RDBMS. It supports multiple producers and
 multiple consumers across an entire stack, with producers and consumers
 written in any language.
 
+[![CI](https://github.com/zizq-labs/zizq-elixir/actions/workflows/ci.yml/badge.svg)](https://github.com/zizq-labs/zizq-elixir/actions/workflows/ci.yml)
+
 > **Work in progress.** This client is under active development and does
 > not yet implement the API. It is made available on GitHub for
 > visibility and feedback.

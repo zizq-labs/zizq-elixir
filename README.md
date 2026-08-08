@@ -2,10 +2,10 @@
 
 Official Elixir client for the [Zizq](https://zizq.io) job queue server.
 
-Zizq is a fast and durable job queue built on an embedded LSM database —
-not on Redis, and not on your RDBMS. It supports multiple producers and
-multiple consumers across an entire stack, with producers and consumers
-written in any language.
+Zizq (**/zɪsk/**) is a fast and durable job queue built on an embedded LSM
+database — not on Redis, and not on your RDBMS. It supports multiple
+producers and multiple consumers across an entire stack, with producers
+and consumers written in any language.
 
 [![CI](https://github.com/zizq-labs/zizq-elixir/actions/workflows/ci.yml/badge.svg)](https://github.com/zizq-labs/zizq-elixir/actions/workflows/ci.yml)
 

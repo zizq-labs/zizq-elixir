@@ -3,7 +3,12 @@
 # Run the Elixir client integration tests against a real Zizq server.
 #
 # Usage:
+#   ./run.sh --binary /path/to/zizq
 #   ./run.sh --binary /path/to/zizq --tarball /path/to/zizq-0.6.0.tar
+#
+# With no --tarball the package is built from the current source first.
+# CI passes the artifact it already built, so the suite runs against
+# the exact bytes that will be published.
 #
 # The server is started on a random OS-assigned port (--port 0) and the
 # actual bound address is parsed from its JSON log output. The test
@@ -34,14 +39,30 @@ while [[ $# -gt 0 ]]; do
     esac
 done
 
-if [[ -z "$BINARY" || -z "$TARBALL" ]]; then
-    echo "Usage: ./run.sh --binary /path/to/zizq --tarball /path/to/zizq-x.y.z.tar [--license-key KEY]"
+if [[ -z "$BINARY" ]]; then
+    echo "Usage: ./run.sh --binary /path/to/zizq [--tarball /path/to/zizq-x.y.z.tar] [--license-key KEY]"
+    echo
+    echo "  --tarball is optional. Omit it and the package is built from the"
+    echo "  current source, which is what you want locally. CI passes the"
+    echo "  artifact it already built and tested."
     exit 1
 fi
 
 if [[ ! -x "$BINARY" ]]; then
     echo "Error: binary not found or not executable: $BINARY"
     exit 1
+fi
+
+# Build from source when no artifact was supplied. Without this the
+# obvious two-step (release.sh, then run.sh) silently tests whatever
+# package happens to be lying in _build/release — so a forgotten
+# rebuild shows up as "function undefined" errors against code that is
+# plainly there in the working tree.
+if [[ -z "$TARBALL" ]]; then
+    echo "==> No --tarball given; building the package from source"
+    "$SCRIPT_DIR/../release.sh" | sed 's/^/    /'
+    VERSION="$(sed -n 's/^[[:space:]]*@version "\(.*\)"/\1/p' "$SCRIPT_DIR/../mix.exs" | head -1)"
+    TARBALL="$SCRIPT_DIR/../_build/release/zizq-${VERSION}.tar"
 fi
 
 if [[ ! -f "$TARBALL" ]]; then
@@ -118,7 +139,8 @@ SERVER_PID=$!
 # address. The key `api: "primary"` is a stable machine-readable field;
 # the message text may change.
 ZIZQ_URL=""
-DEADLINE=$((SECONDS + 10))
+BOOT_TIMEOUT="${ZIZQ_SERVER_BOOT_TIMEOUT:-60}"
+DEADLINE=$((SECONDS + BOOT_TIMEOUT))
 while [[ $SECONDS -lt $DEADLINE ]]; do
     if ! kill -0 "$SERVER_PID" 2>/dev/null; then
         echo "Error: server exited unexpectedly:"
@@ -138,7 +160,8 @@ while [[ $SECONDS -lt $DEADLINE ]]; do
 done
 
 if [[ -z "$ZIZQ_URL" ]]; then
-    echo "Error: timed out waiting for server to start."
+    echo "Error: server did not report a listening address within ${BOOT_TIMEOUT}s."
+    echo "       Set ZIZQ_SERVER_BOOT_TIMEOUT to allow longer."
     cat "$SERVER_LOG"
     exit 1
 fi

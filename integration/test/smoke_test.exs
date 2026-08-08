@@ -33,9 +33,9 @@ defmodule Zizq.Integration.SmokeTest do
 
   test "the server under test is new enough for this client", ctx do
     {:ok, {{_, 200, _}, _headers, body}} =
-      :httpc.request(:get, {~c"#{ctx.url}/version", []}, [], [])
+      :httpc.request(:get, {~c"#{ctx.url}/version", []}, [], body_format: :binary)
 
-    %{"version" => server_version} = body |> to_string() |> JSON.decode!()
+    %{"version" => server_version} = JSON.decode!(body)
 
     server = Version.parse!(server_version)
     client = Version.parse!(Zizq.version())

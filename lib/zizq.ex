@@ -112,6 +112,47 @@ defmodule Zizq do
   def version, do: @version
 
   @doc """
+  Enqueue a job.
+
+  Accepts a `Zizq.Enqueue` struct, or a keyword list or map of the same
+  fields. Only `:type` is required; see `Zizq.Enqueue` for the rest.
+
+      Zizq.enqueue(MyApp.Zizq, type: "send_email", payload: %{"user_id" => 42})
+      #=> {:ok, %Zizq.Job{id: "03gn…", status: :ready}}
+
+  Returns the job the server recorded, so its `:id` and server-assigned
+  defaults are available immediately. Raises `ArgumentError` for an
+  invalid enqueue, since that is a bug in the calling code rather than
+  a runtime condition to handle.
+  """
+  @spec enqueue(atom(), Zizq.Enqueue.t() | keyword() | map()) ::
+          {:ok, Zizq.Job.t()} | {:error, Zizq.Error.t()}
+  def enqueue(name, enqueue) when is_atom(name) do
+    config = Config.fetch!(name)
+    wire = enqueue |> Zizq.Enqueue.new!() |> Zizq.Enqueue.to_wire()
+
+    case Zizq.HTTP.request(config, :post, "/jobs", wire) do
+      {:ok, 201, job} -> {:ok, Zizq.Job.from_wire(job)}
+      {:ok, status, body} -> {:error, Zizq.Error.from_response(status, body)}
+      {:error, %Zizq.Error{} = error} -> {:error, error}
+    end
+  end
+
+  @doc """
+  Enqueue a job, raising on failure.
+
+  Suits call sites where a failed enqueue should abort the surrounding
+  work, such as inside a transaction.
+  """
+  @spec enqueue!(atom(), Zizq.Enqueue.t() | keyword() | map()) :: Zizq.Job.t()
+  def enqueue!(name, enqueue) do
+    case enqueue(name, enqueue) do
+      {:ok, job} -> job
+      {:error, error} -> raise error
+    end
+  end
+
+  @doc """
   Ask the server for its version.
 
   Useful as a liveness check — it is the cheapest endpoint the server

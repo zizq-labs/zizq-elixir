@@ -24,7 +24,9 @@ defmodule Zizq.MixProject do
   end
 
   defp deps do
-    []
+    [
+      {:msgpax, "~> 2.4"}
+    ]
   end
 
   defp description do

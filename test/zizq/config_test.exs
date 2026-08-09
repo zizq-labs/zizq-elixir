@@ -13,7 +13,8 @@ defmodule Zizq.ConfigTest do
       config = Config.new!(@base)
 
       assert config.name == :cfg_test
-      assert config.url == "http://localhost:7890"
+      assert Config.url(config) == "http://localhost:7890"
+      assert {config.uri.scheme, config.uri.host, config.uri.port} == {"http", "localhost", 7890}
       assert config.codec == Zizq.Codec.MessagePack
       assert config.pool_count == 1
       assert config.connect_timeout == 5_000
@@ -57,17 +58,51 @@ defmodule Zizq.ConfigTest do
 
     # A double slash in a path is not merely cosmetic — the server
     # routes on exact paths, so `//jobs` would 404.
-    test "strips trailing slashes from the URL" do
-      assert Config.new!(Keyword.put(@base, :url, "http://localhost:7890/")).url ==
-               "http://localhost:7890"
+    test "strips trailing slashes from the path" do
+      for url <- ["http://localhost:7890/", "http://localhost:7890///"] do
+        assert Config.new!(Keyword.put(@base, :url, url)).uri.path == nil
+      end
 
-      assert Config.new!(Keyword.put(@base, :url, "http://localhost:7890///")).url ==
-               "http://localhost:7890"
+      assert Config.new!(Keyword.put(@base, :url, "https://example.com/zizq/")).uri.path ==
+               "/zizq"
     end
 
     test "keeps a path as a prefix, for proxied deployments" do
-      assert Config.new!(Keyword.put(@base, :url, "https://example.com/zizq")).url ==
-               "https://example.com/zizq"
+      config = Config.new!(Keyword.put(@base, :url, "https://example.com/zizq"))
+
+      assert config.uri.path == "/zizq"
+      assert Config.url(config) == "https://example.com/zizq"
+    end
+
+    # Finch and Mint both want the parsed form, so a caller who already
+    # has one should not have to stringify it just to be re-parsed.
+    test "accepts a URI as well as a string" do
+      from_string = Config.new!(Keyword.put(@base, :url, "https://example.com/zizq"))
+      from_uri = Config.new!(Keyword.put(@base, :url, URI.parse("https://example.com/zizq")))
+
+      assert from_uri.uri == from_string.uri
+    end
+
+    # Silently discarding these would hide a mistake; a query string on
+    # a base URL means the caller expected it to be sent.
+    test "rejects a base URL carrying a query, fragment or userinfo" do
+      for url <- [
+            "http://localhost:7890?foo=bar",
+            "http://localhost:7890#frag",
+            "http://user:pass@localhost:7890"
+          ] do
+        assert_raise ArgumentError, ~r/base URL/, fn ->
+          Config.new!(Keyword.put(@base, :url, url))
+        end
+      end
+    end
+
+    test "rejects a URI missing a scheme or host" do
+      for url <- [URI.parse("/jobs"), URI.parse("localhost:7890")] do
+        assert_raise ArgumentError, ~r/http or https/, fn ->
+          Config.new!(Keyword.put(@base, :url, url))
+        end
+      end
     end
 
     test "rejects URLs that aren't usable http(s) endpoints" do

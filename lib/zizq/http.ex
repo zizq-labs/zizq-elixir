@@ -51,10 +51,17 @@ defmodule Zizq.HTTP do
   def request(%Config{} = config, method, path, body \\ nil) do
     with {:ok, headers, encoded} <- build_body(config, body) do
       method
-      |> Finch.build(config.url <> path, headers, encoded)
+      |> Finch.build(endpoint(config, path), headers, encoded)
       |> run(config, @readiness_backoff_ms)
       |> decode_response(config)
     end
+  end
+
+  # A `URI` rather than a string: `Finch.build/5` accepts one directly,
+  # and passing it pre-parsed skips the `URI.parse/1` Finch would
+  # otherwise run on every request.
+  defp endpoint(config, path) do
+    %{config.uri | path: (config.uri.path || "") <> path}
   end
 
   defp run(request, config, backoff) do

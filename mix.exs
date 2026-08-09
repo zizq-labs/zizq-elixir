@@ -1,7 +1,7 @@
 defmodule Zizq.MixProject do
   use Mix.Project
 
-  @version "0.6.0-alpha.2"
+  @version "0.6.0-alpha.3"
   @source_url "https://github.com/zizq-labs/zizq-elixir"
 
   def project do

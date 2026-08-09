@@ -58,6 +58,18 @@ defmodule Zizq.EnqueueTest do
       end
     end
 
+    # The server rejects this on both endpoints; catching it locally
+    # turns a round trip into an immediate error at the call site.
+    test "rejects unique_key combined with batch" do
+      assert_raise ArgumentError, ~r/:unique_key and :batch cannot be combined/, fn ->
+        Enqueue.new!(
+          type: "a",
+          unique_key: "k",
+          batch: [key: "b", when: "true", fold: "$new"]
+        )
+      end
+    end
+
     # Silently ignoring it would look like uniqueness was configured.
     test "rejects a uniqueness scope with no key" do
       assert_raise ArgumentError, ~r/no effect without :unique_key/, fn ->

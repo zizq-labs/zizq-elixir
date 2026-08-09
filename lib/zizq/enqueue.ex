@@ -160,6 +160,13 @@ defmodule Zizq.Enqueue do
       raise ArgumentError, "enqueue :unique_while has no effect without :unique_key"
     end
 
+    # The server rejects this combination on both the single and bulk
+    # endpoints. Catching it here turns a round trip into an immediate
+    # error at the call site that got it wrong.
+    if e.unique_key && e.batch do
+      raise ArgumentError, "enqueue :unique_key and :batch cannot be combined"
+    end
+
     e
   end
 

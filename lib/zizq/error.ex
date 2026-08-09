@@ -10,7 +10,7 @@ defmodule Zizq.Error do
   would not encode — so there is a single shape to match on wherever
   the problem occurred. The `:reason` field says which kind it was.
 
-      case Zizq.enqueue(MyApp.Zizq, job) do
+      case Zizq.enqueue(job, MyApp.Zizq) do
         {:ok, job} ->
           job
 

@@ -5,7 +5,7 @@ defmodule Zizq.Job do
   @moduledoc """
   A job record from the server.
 
-  Returned by `Zizq.enqueue/3`, yielded by the take stream, and listed
+  Returned by `Zizq.enqueue/2`, yielded by the take stream, and listed
   by the query API. Which fields are populated depends on the job's
   lifecycle state — `:dequeued_at` is only set once a worker has taken
   it, `:completed_at` only once it has finished — so treat anything

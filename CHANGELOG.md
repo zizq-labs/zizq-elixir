@@ -1,5 +1,45 @@
 # Changelog
 
+## 0.6.0-alpha.3
+
+Adds bulk enqueue. Consuming jobs is still to come, as are the query
+and cron endpoints.
+
+### Changed
+
+- **Breaking: `enqueue/2`, `enqueue!/2`, `enqueue_all/2` and
+  `enqueue_all!/2` now take the job first and the client second.**
+
+      # before
+      Zizq.enqueue(MyApp.Zizq, type: "send_email")
+
+      # now
+      Zizq.Enqueue.new!(type: "send_email") |> Zizq.enqueue(MyApp.Zizq)
+
+  `|>` passes its left-hand value as the first argument, so the old
+  order could not be piped without wrapping every call in `then/2`.
+  Elixir's convention is that the subject comes first, and here the
+  subject is the job — which matters more once job modules are
+  building enqueues and pipelines become the normal way to write them.
+
+- **`:unique_key` and `:batch` together are now rejected locally.** The
+  server refuses the combination on both endpoints; catching it in
+  `Zizq.Enqueue` turns a round trip into an immediate error at the call
+  site that got it wrong.
+
+### Added
+
+- **`Zizq.enqueue_all/2` and `Zizq.enqueue_all!/2`.** Enqueue many jobs
+  in a single request:
+
+      users
+      |> Enum.map(&Zizq.Enqueue.new!(type: "send_email", payload: %{"user_id" => &1.id}))
+      |> Zizq.enqueue_all(MyApp.Zizq)
+
+  Elements may be `Zizq.Enqueue` structs, keyword lists or maps, mixed
+  freely. Jobs are returned in the order they were sent, and an empty
+  list short-circuits immediately without contacting the server.
+
 ## 0.6.0-alpha.2
 
 First release with a usable API. Jobs can be enqueued; consuming them

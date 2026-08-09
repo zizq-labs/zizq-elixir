@@ -117,17 +117,24 @@ defmodule Zizq do
   Accepts a `Zizq.Enqueue` struct, or a keyword list or map of the same
   fields. Only `:type` is required; see `Zizq.Enqueue` for the rest.
 
-      Zizq.enqueue(MyApp.Zizq, type: "send_email", payload: %{"user_id" => 42})
+      Zizq.Enqueue.new!(type: "send_email", payload: %{"user_id" => 42})
+      |> Zizq.enqueue(MyApp.Zizq)
       #=> {:ok, %Zizq.Job{id: "03gn…", status: :ready}}
 
+  The job comes first and the client second so that enqueues pipe,
+  which is how they are normally written once job modules are building
+  them.
+
   Returns the job the server recorded, so its `:id` and server-assigned
-  defaults are available immediately. Raises `ArgumentError` for an
-  invalid enqueue, since that is a bug in the calling code rather than
-  a runtime condition to handle.
+  defaults are available immediately. Note that the returned job carries
+  no `:payload` — the server omits it from enqueue responses.
+
+  Raises `ArgumentError` for an invalid enqueue, since that is a bug in
+  the calling code rather than a runtime condition to handle.
   """
-  @spec enqueue(atom(), Zizq.Enqueue.t() | keyword() | map()) ::
+  @spec enqueue(Zizq.Enqueue.t() | keyword() | map(), atom()) ::
           {:ok, Zizq.Job.t()} | {:error, Zizq.Error.t()}
-  def enqueue(name, enqueue) when is_atom(name) do
+  def enqueue(enqueue, name) when is_atom(name) do
     config = Config.fetch!(name)
     wire = enqueue |> Zizq.Enqueue.new!() |> Zizq.Enqueue.to_wire()
 
@@ -144,12 +151,70 @@ defmodule Zizq do
   Suits call sites where a failed enqueue should abort the surrounding
   work, such as inside a transaction.
   """
-  @spec enqueue!(atom(), Zizq.Enqueue.t() | keyword() | map()) :: Zizq.Job.t()
-  def enqueue!(name, enqueue) do
-    case enqueue(name, enqueue) do
+  @spec enqueue!(Zizq.Enqueue.t() | keyword() | map(), atom()) :: Zizq.Job.t()
+  def enqueue!(enqueue, name) do
+    case enqueue(enqueue, name) do
       {:ok, job} -> job
       {:error, error} -> raise error
     end
+  end
+
+  @doc """
+  Enqueue many jobs in a single atomic bulk request.
+
+  Each element may be a `Zizq.Enqueue` struct, a keyword list, or a
+  map, exactly as `enqueue/2` accepts.
+
+      users
+      |> Enum.map(&Zizq.Enqueue.new!(type: "send_email", payload: %{"user_id" => &1.id}))
+      |> Zizq.enqueue_all(MyApp.Zizq)
+      #=> {:ok, [%Zizq.Job{}, ...]}
+
+  Jobs are returned in the order they were sent. An empty list short
+  circuits immediately without contacting the server.
+
+  Note that the returned jobs carry no `:payload` — the server omits it
+  from enqueue responses.
+  """
+  @spec enqueue_all([Zizq.Enqueue.t() | keyword() | map()], atom()) ::
+          {:ok, [Zizq.Job.t()]} | {:error, Zizq.Error.t()}
+  def enqueue_all([], name) when is_atom(name), do: {:ok, []}
+
+  def enqueue_all(enqueues, name) when is_list(enqueues) and is_atom(name) do
+    config = Config.fetch!(name)
+    wire = %{"jobs" => Enum.map(Enum.with_index(enqueues), &to_wire_at/1)}
+
+    case Zizq.HTTP.request(config, :post, "/jobs/bulk", wire) do
+      # 200 rather than 201 when every job was a duplicate or folded
+      # into an existing batch, so nothing new was created. Both are
+      # success.
+      {:ok, status, %{"jobs" => jobs}} when status in [200, 201] ->
+        {:ok, Enum.map(jobs, &Zizq.Job.from_wire/1)}
+
+      {:ok, status, body} ->
+        {:error, Zizq.Error.from_response(status, body)}
+
+      {:error, %Zizq.Error{} = error} ->
+        {:error, error}
+    end
+  end
+
+  @doc """
+  Bulk enqueue many jobs atomically, raising on failure.
+  """
+  @spec enqueue_all!([Zizq.Enqueue.t() | keyword() | map()], atom()) :: [Zizq.Job.t()]
+  def enqueue_all!(enqueues, name) do
+    case enqueue_all(enqueues, name) do
+      {:ok, jobs} -> jobs
+      {:error, error} -> raise error
+    end
+  end
+
+  defp to_wire_at({enqueue, index}) do
+    Zizq.Enqueue.new!(enqueue) |> Zizq.Enqueue.to_wire()
+  rescue
+    error in ArgumentError ->
+      reraise ArgumentError, "jobs[#{index}]: " <> Exception.message(error), __STACKTRACE__
   end
 
   @doc """

@@ -194,11 +194,14 @@ worker written in Ruby, Node or Rust, and vice versa. The macro layer is
 sugar over a plain functional API that takes maps with string keys:
 
 ```elixir
-Zizq.enqueue(MyApp.Zizq, %{
-  type: "send_email",
-  queue: "emails",
-  payload: %{"user_id" => 42, "template" => "welcome"}
-})
+Zizq.enqueue(
+  %{
+    type: "send_email",
+    queue: "emails",
+    payload: %{"user_id" => 42, "template" => "welcome"}
+  },
+  MyApp.Zizq
+)
 ```
 
 ## Versioning

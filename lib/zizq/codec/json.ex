@@ -19,6 +19,9 @@ defmodule Zizq.Codec.JSON do
   def stream_content_type, do: "application/x-ndjson"
 
   @impl Zizq.Codec
+  def framing, do: :line_delimited
+
+  @impl Zizq.Codec
   def encode(term) do
     {:ok, JSON.encode_to_iodata!(term)}
   rescue

@@ -31,6 +31,9 @@ defmodule Zizq.Codec.MessagePack do
   def stream_content_type, do: "application/vnd.zizq.msgpack-stream"
 
   @impl Zizq.Codec
+  def framing, do: :length_prefixed
+
+  @impl Zizq.Codec
   def encode(term) do
     {:ok, Msgpax.pack!(term)}
   rescue

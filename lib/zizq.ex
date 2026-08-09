@@ -218,6 +218,147 @@ defmodule Zizq do
   end
 
   @doc """
+  Report a job as completed successfully.
+
+  Accepts a `Zizq.Job` or a job id.
+
+      Zizq.report_success(job, MyApp.Zizq)
+      #=> :ok
+
+  A job the server no longer holds in flight — already acknowledged, or
+  redelivered elsewhere after its visibility timeout — answers
+  `{:error, %Zizq.Error{reason: :not_found}}`. That is usually benign
+  rather than a failure: the work is done either way, and nothing is
+  gained by retrying.
+
+  > #### Completed jobs disappear by default {: .tip}
+  >
+  > The server's default retention for completed jobs is zero, so a job
+  > is purged as it completes and a later `GET /jobs/{id}` will 404.
+  > Set `retention: [completed: ...]` when enqueueing if you need to
+  > inspect it afterwards. Dead jobs are kept for seven days by
+  > default, so failures remain visible without doing anything.
+  """
+  @spec report_success(Zizq.Job.t() | String.t(), atom()) :: :ok | {:error, Zizq.Error.t()}
+  def report_success(job, name) when is_atom(name) do
+    config = Config.fetch!(name)
+
+    case Zizq.HTTP.request(config, :post, "/jobs/#{job_id(job)}/success") do
+      {:ok, 204, _body} -> :ok
+      {:ok, status, body} -> {:error, Zizq.Error.from_response(status, body)}
+      {:error, %Zizq.Error{} = error} -> {:error, error}
+    end
+  end
+
+  @doc """
+  Report many jobs as completed in a single request.
+
+  Returns the ids the server did not recognise, so `{:ok, []}` means
+  every one was acknowledged.
+
+      Zizq.report_success_all(jobs, MyApp.Zizq)
+      #=> {:ok, []}
+
+  A partial result is a success, not an error: the jobs the server did
+  recognise **were** completed. Only the unrecognised ids come back,
+  and those are typically jobs already acknowledged or redelivered
+  elsewhere. An empty list short-circuits without contacting the server.
+  """
+  @spec report_success_all([Zizq.Job.t() | String.t()], atom()) ::
+          {:ok, [String.t()]} | {:error, Zizq.Error.t()}
+  def report_success_all([], name) when is_atom(name), do: {:ok, []}
+
+  def report_success_all(jobs, name) when is_list(jobs) and is_atom(name) do
+    config = Config.fetch!(name)
+    wire = %{"ids" => Enum.map(jobs, &job_id/1)}
+
+    case Zizq.HTTP.request(config, :post, "/jobs/success", wire) do
+      # 204 means every id was found. 422 reports the ones that were
+      # not, having completed the rest.
+      {:ok, 204, _body} -> {:ok, []}
+      {:ok, 422, %{"not_found" => not_found}} -> {:ok, not_found}
+      {:ok, status, body} -> {:error, Zizq.Error.from_response(status, body)}
+      {:error, %Zizq.Error{} = error} -> {:error, error}
+    end
+  end
+
+  @doc """
+  Report a job as failed.
+
+  The server decides what happens next — reschedule with backoff, or
+  declare the job dead once its retry limit is spent — and returns the
+  job as it now stands, so the new `:status` and `:attempts` are
+  visible immediately.
+
+      Zizq.report_failure(job, MyApp.Zizq, message: "SMTP timeout")
+
+  ## Options
+
+    * `:message` — what went wrong. **Required.**
+    * `:error_type` — an exception or error class name, e.g.
+      `"Mint.TransportError"`.
+    * `:backtrace` — a formatted stacktrace.
+    * `:kill` — when true, declare the job dead now regardless of how
+      many attempts remain.
+    * `:retry_at` — a `t:DateTime.t/0` (or Unix milliseconds) to retry
+      at, bypassing the backoff policy. Reschedules the job even if its
+      retry limit is spent.
+
+  `:kill` and `:retry_at` are what a handler's `{:cancel, reason}` and
+  `{:snooze, seconds}` results map onto.
+  """
+  @spec report_failure(Zizq.Job.t() | String.t(), atom(), keyword()) ::
+          {:ok, Zizq.Job.t()} | {:error, Zizq.Error.t()}
+  def report_failure(job, name, opts) when is_atom(name) do
+    config = Config.fetch!(name)
+    wire = failure_body(opts)
+
+    case Zizq.HTTP.request(config, :post, "/jobs/#{job_id(job)}/failure", wire) do
+      {:ok, 200, body} -> {:ok, Zizq.Job.from_wire(body)}
+      {:ok, status, body} -> {:error, Zizq.Error.from_response(status, body)}
+      {:error, %Zizq.Error{} = error} -> {:error, error}
+    end
+  end
+
+  @failure_keys [:message, :error_type, :backtrace, :kill, :retry_at]
+
+  defp failure_body(opts) do
+    opts = Map.new(opts)
+
+    case Map.keys(opts) -- @failure_keys do
+      [] -> :ok
+      unknown -> raise ArgumentError, "unknown failure #{inspect(unknown)}"
+    end
+
+    message = Map.get(opts, :message)
+
+    unless is_binary(message) and message != "" do
+      raise ArgumentError,
+            "report_failure requires a non-empty :message, got #{inspect(message)}"
+    end
+
+    optional =
+      %{
+        "error_type" => Map.get(opts, :error_type),
+        "backtrace" => Map.get(opts, :backtrace),
+        "retry_at" => failure_retry_at(Map.get(opts, :retry_at)),
+        # Omitted unless true: the server defaults it to false, and
+        # sending it needlessly would suggest it were meaningful.
+        "kill" => if(Map.get(opts, :kill), do: true)
+      }
+      |> Map.reject(fn {_key, value} -> is_nil(value) end)
+
+    Map.put(optional, "message", message)
+  end
+
+  defp failure_retry_at(nil), do: nil
+  defp failure_retry_at(%DateTime{} = at), do: DateTime.to_unix(at, :millisecond)
+  defp failure_retry_at(ms) when is_integer(ms), do: ms
+
+  defp job_id(%Zizq.Job{id: id}), do: id
+  defp job_id(id) when is_binary(id), do: id
+
+  @doc """
   Ask the server for its version.
 
   Useful as a liveness check — it is the cheapest endpoint the server

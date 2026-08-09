@@ -20,12 +20,12 @@ defmodule Zizq.Config do
       """
     ],
     url: [
-      type: :string,
+      type: {:or, [:string, {:struct, URI}]},
       required: true,
       doc: """
-      Base URL of the Zizq server, e.g. `"http://localhost:7890"`. A
-      path is allowed and is treated as a prefix, for servers behind a
-      reverse proxy.
+      Base URL of the Zizq server, e.g. `"http://localhost:7890"`, as a
+      string or a `URI`. A path is allowed and is treated as a prefix,
+      for servers behind a reverse proxy.
       """
     ],
     format: [
@@ -53,28 +53,46 @@ defmodule Zizq.Config do
     receive_timeout: [
       type: :timeout,
       default: 15_000,
-      doc: "Milliseconds to wait for a response. Does not apply to the take stream."
+      doc: "Milliseconds to wait for a response. Does not apply to streaming endpoints."
+    ],
+    stream_idle_timeout: [
+      type: :timeout,
+      default: 30_000,
+      doc: """
+      Milliseconds a streaming connection may go without any data
+      before it is treated as dead and reconnected.
+
+      The server sends heartbeat frames on an otherwise idle stream
+      specifically so this can be detected, so the timeout only has to
+      exceed that interval. The default is ten times the server's own
+      default of three seconds. Raise it if the server runs with a
+      longer heartbeat interval, since a timeout shorter than the
+      heartbeat would reconnect a perfectly healthy connection on a
+      loop.
+      """
     ]
   ]
 
   @type t :: %__MODULE__{
           name: atom(),
-          url: String.t(),
+          uri: URI.t(),
           codec: Zizq.Codec.t(),
           finch_name: atom(),
           pool_count: pos_integer(),
           connect_timeout: timeout(),
-          receive_timeout: timeout()
+          receive_timeout: timeout(),
+          stream_idle_timeout: timeout()
         }
 
   defstruct [
     :name,
-    :url,
+    :uri,
     :codec,
     :finch_name,
     :pool_count,
     :connect_timeout,
-    :receive_timeout
+    :receive_timeout,
+    :stream_idle_timeout
   ]
 
   @doc false
@@ -93,12 +111,17 @@ defmodule Zizq.Config do
 
     %__MODULE__{
       name: name,
-      url: normalise_url!(Keyword.fetch!(opts, :url)),
+      # Stored parsed rather than as a string. The take stream needs
+      # scheme, host and port separately for `Mint.HTTP.connect/4`, and
+      # `Finch.build/5` accepts a `URI` directly — passing one skips
+      # the `URI.parse/1` it would otherwise run on every request.
+      uri: normalise_uri!(Keyword.fetch!(opts, :url)),
       codec: Zizq.Codec.fetch!(Keyword.fetch!(opts, :format)),
       finch_name: Module.concat(name, Finch),
       pool_count: Keyword.fetch!(opts, :pool_count),
       connect_timeout: Keyword.fetch!(opts, :connect_timeout),
-      receive_timeout: Keyword.fetch!(opts, :receive_timeout)
+      receive_timeout: Keyword.fetch!(opts, :receive_timeout),
+      stream_idle_timeout: Keyword.fetch!(opts, :stream_idle_timeout)
     }
   end
 
@@ -136,17 +159,58 @@ defmodule Zizq.Config do
 
   defp key(name), do: {__MODULE__, name}
 
-  # Trailing slashes are stripped so `url <> "/jobs"` can't produce a
-  # double slash. A path is kept as a prefix for proxied deployments.
-  defp normalise_url!(url) do
+  @doc "The base URL as a string, for logs and messages."
+  @spec url(t()) :: String.t()
+  def url(%__MODULE__{uri: uri}), do: URI.to_string(uri)
+
+  # Trailing slashes are stripped from the path so joining an endpoint
+  # onto it cannot produce a double slash, which the server would not
+  # route. A path is otherwise kept, as a prefix for proxied
+  # deployments.
+  defp normalise_uri!(url) do
     case URI.new(url) do
-      {:ok, %URI{scheme: scheme, host: host}}
+      {:ok, %URI{scheme: scheme, host: host} = uri}
       when scheme in ["http", "https"] and is_binary(host) ->
-        String.trim_trailing(url, "/")
+        reject_extras!(uri)
+
+        # Rebuilt from its parts rather than reused. `URI.parse/1`
+        # populates the deprecated `:authority` field and `URI.new/1`
+        # does not, so a caller passing a URI and a caller passing the
+        # equivalent string would otherwise end up with structs that
+        # differ in a field nobody reads.
+        %URI{
+          scheme: scheme,
+          host: host,
+          port: uri.port,
+          path: normalise_path(uri.path)
+        }
 
       _ ->
         raise ArgumentError,
               "expected :url to be an http or https URL with a host, got: #{inspect(url)}"
+    end
+  end
+
+  # Dropping these silently would be worse than refusing them: a query
+  # string on the base URL is a mistake, and userinfo suggests an
+  # expectation of authentication that this API does not have.
+  defp reject_extras!(%URI{} = uri) do
+    for {label, value} <- [query: uri.query, fragment: uri.fragment, userinfo: uri.userinfo],
+        value != nil do
+      raise ArgumentError,
+            "expected :url to be a base URL, but it has a #{label} " <>
+              "(#{inspect(value)}). Endpoint paths are appended by the client."
+    end
+
+    :ok
+  end
+
+  defp normalise_path(nil), do: nil
+
+  defp normalise_path(path) do
+    case String.trim_trailing(path, "/") do
+      "" -> nil
+      trimmed -> trimmed
     end
   end
 end

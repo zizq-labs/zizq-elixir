@@ -18,7 +18,7 @@ defmodule Zizq.SupervisorTest do
     start_supervised!({Zizq, name: :sup_test, url: @url})
 
     config = Config.fetch!(:sup_test)
-    assert config.url == @url
+    assert Config.url(config) == @url
     assert config.codec == Zizq.Codec.MessagePack
 
     assert Process.whereis(:sup_test) |> is_pid()

@@ -50,7 +50,20 @@ defmodule Zizq.Codec do
   @callback content_type() :: String.t()
 
   @doc """
-  Media type for the streaming `/jobs/take` endpoint.
+  How streaming endpoints delimit records.
+
+    * `:line_delimited` — one record per line, terminated by `\\n`; an
+      empty line is a heartbeat.
+    * `:length_prefixed` — each record is a big-endian `u32` byte count
+      followed by that many bytes; a zero length is a heartbeat.
+
+  Declared here rather than inferred from the codec module so a custom
+  codec can say which framing its format uses.
+  """
+  @callback framing() :: :line_delimited | :length_prefixed
+
+  @doc """
+  Media type for streaming endpoints.
 
   Streaming is framed differently from a request/response body
   (newline-delimited JSON, or length-prefixed MessagePack), so it

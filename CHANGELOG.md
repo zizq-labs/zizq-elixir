@@ -1,5 +1,64 @@
 # Changelog
 
+## 0.6.0-alpha.4
+
+Adds job consumption: a supervised worker, the `/jobs/take` stream and
+the acknowledgement endpoints underneath it. The query and cron
+endpoints are still to come.
+
+### Added
+
+- **`Zizq.Worker`.** Takes jobs from one or more queues and runs them.
+  Add one to your supervision tree alongside a client:
+
+      children = [
+        {Zizq, name: MyApp.Zizq, url: "http://localhost:7890"},
+        {Zizq.Worker,
+         client: MyApp.Zizq,
+         queues: ["emails"],
+         concurrency: 25,
+         handler: &MyApp.handle_job/1}
+      ]
+
+  The order matters: children are stopped in reverse, so the worker
+  drains while the client it acknowledges through is still alive.
+
+  Each job runs in its own supervised task. A handler that raises,
+  exits or is killed outright is reported to the server as a failure
+  with its exception and stacktrace, and cannot take the worker down;
+  a slow one cannot block the stream from being read. What a handler
+  returns decides the job's fate — `:ok` or `{:ok, term}` completes
+  it, `{:error, reason}` fails it for retry under the backoff policy,
+  `{:cancel, reason}` kills it whatever attempts remain, and
+  `{:snooze, milliseconds}` or `{:snooze, %DateTime{}}` defers it.
+  Anything else is acknowledged as complete and logged as a warning
+  naming what came back, since a handler that ended on the wrong value
+  has most likely already done its work.
+
+  **Snooze durations are milliseconds**, as every duration in this
+  client is.
+
+  On shutdown the worker stops taking new work, lets running jobs
+  finish, flushes outstanding acknowledgements, and only then closes
+  the connection — in that order, so the server keeps the in-flight
+  jobs until the acknowledgements arrive. `:drain_timeout` (30s by
+  default) is the whole budget rather than a per-step one, so it can be
+  set from whatever deadline a deployment or orchestrator imposes;
+  anything still running when it expires is abandoned and redelivered.
+
+- **`Zizq.report_success/2`, `Zizq.report_success_all/2` and
+  `Zizq.report_failure/3`.** Acknowledge jobs directly, for consumers
+  not built on `Zizq.Worker`. `report_failure/3` takes `:message`
+  (required), `:error_type`, `:backtrace`, `:kill` to declare a job
+  dead now, and `:retry_at` to reschedule it bypassing the backoff
+  policy.
+
+- **`:stream_idle_timeout` client option**, 30s by default. How long a
+  streaming connection may go without any data before it is treated as
+  dead and reconnected. The server heartbeats every three seconds by
+  default, so raise this if yours is configured to heartbeat less
+  often.
+
 ## 0.6.0-alpha.3
 
 Adds bulk enqueue. Consuming jobs is still to come, as are the query

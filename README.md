@@ -177,7 +177,7 @@ The return value of `perform/2` decides what happens next:
 def perform(payload, _job) do
   case MyApp.Billing.charge(payload) do
     :ok                         -> :ok               # acknowledge
-    {:error, :rate_limited}     -> {:snooze, 60}     # retry in 60 seconds
+    {:error, :rate_limited}     -> {:snooze, 60_000} # retry in a minute
     {:error, :customer_deleted} -> {:cancel, :gone}  # kill, do not retry
     {:error, reason}            -> {:error, reason}  # retry with backoff
   end

@@ -41,7 +41,18 @@ defmodule Zizq.FakeServer do
   def start!(handler) when is_function(handler, 1) do
     pid =
       ExUnit.Callbacks.start_supervised!(
-        {Bandit, plug: {__MODULE__, handler}, scheme: :http, port: 0, startup_log: false},
+        {
+          Bandit,
+          # Long-lived streaming connections would otherwise hold
+          # teardown open for ThousandIsland's default drain period,
+          # which dwarfs the tests themselves. Nothing here needs a
+          # graceful close.
+          plug: {__MODULE__, handler},
+          scheme: :http,
+          port: 0,
+          startup_log: false,
+          thousand_island_options: [shutdown_timeout: 0]
+        },
         id: {__MODULE__, System.unique_integer([:positive])}
       )
 

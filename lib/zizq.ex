@@ -305,7 +305,7 @@ defmodule Zizq do
       retry limit is spent.
 
   `:kill` and `:retry_at` are what a handler's `{:cancel, reason}` and
-  `{:snooze, seconds}` results map onto.
+  `{:snooze, milliseconds}` results map onto.
   """
   @spec report_failure(Zizq.Job.t() | String.t(), atom(), keyword()) ::
           {:ok, Zizq.Job.t()} | {:error, Zizq.Error.t()}

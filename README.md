@@ -155,7 +155,8 @@ the connection.
 The worker's only dispatch interface is `handler:`. Anything that takes
 a `%Zizq.Job{}` — the server's job record, as distinct from the
 `Zizq.JobKind` behaviour used to declare one — and succeeds or fails.
-`Zizq.Router` is a builder for one, and job types are plain strings:
+A `Zizq.Router` is accepted too, and dispatches by type — job types
+are plain strings:
 
 ```elixir
 Zizq.Router.new()

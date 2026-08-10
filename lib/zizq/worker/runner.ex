@@ -32,7 +32,10 @@ defmodule Zizq.Worker.Runner do
 
     state = %{
       client: Keyword.fetch!(opts, :client),
-      handler: Keyword.fetch!(opts, :handler),
+      # Compiled once here rather than per job, so dispatching through
+      # a router costs exactly what dispatching through a plain
+      # function does.
+      handler: to_handler(Keyword.fetch!(opts, :handler)),
       acker: Keyword.fetch!(opts, :acker),
       tasks: Keyword.fetch!(opts, :tasks),
       concurrency: Keyword.fetch!(opts, :concurrency),
@@ -58,6 +61,9 @@ defmodule Zizq.Worker.Runner do
 
   defp put_opt(opts, _key, nil), do: opts
   defp put_opt(opts, key, value), do: Keyword.put(opts, key, value)
+
+  defp to_handler(%Zizq.Router{} = router), do: Zizq.Router.build(router)
+  defp to_handler(fun) when is_function(fun, 1), do: fun
 
   @impl GenServer
   def handle_info({:zizq_stream, stream, message}, %{stream: stream} = state) do

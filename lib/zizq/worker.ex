@@ -62,9 +62,13 @@ defmodule Zizq.Worker do
   @options_schema [
     client: [type: :atom, required: true, doc: "Name of a running `Zizq` client."],
     handler: [
-      type: {:fun, 1},
+      type: {:or, [{:fun, 1}, {:struct, Zizq.Router}]},
       required: true,
-      doc: "Function called with each `Zizq.Job`. See the module docs."
+      doc: """
+      What to run for each job: a function taking a `Zizq.Job`, or a
+      `Zizq.Router` to dispatch by type. A router is compiled to a
+      function once, when the worker starts.
+      """
     ],
     name: [type: :atom, doc: "Name for this worker. Defaults to the module."],
     queues: [

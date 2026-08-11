@@ -229,6 +229,113 @@ defmodule Zizq.JobKindTest do
     end
   end
 
+  describe "batching declared on a job module" do
+    defmodule Digest do
+      use Zizq.JobKind,
+        type: "digest",
+        batch: [limit: 100, path: ".events"]
+
+      @impl Zizq.JobKind
+      def perform(_payload), do: :ok
+    end
+
+    defmodule Audit do
+      use Zizq.JobKind, type: "audit", batch: [limit: 1_000]
+
+      @impl Zizq.JobKind
+      def perform(_payload), do: :ok
+    end
+
+    test "the expressions are generated, so the module declares neither" do
+      wire = Zizq.Enqueue.to_wire(Digest.new(%{"tenant_id" => 1, "events" => []}))
+
+      assert wire["batch"]["when"] ==
+               "(($existing | .events) + ($new | .events)) | length <= 100"
+
+      assert wire["batch"]["fold"] == "$existing | .events += ($new | .events)"
+    end
+
+    test "the key hashes everything but the batch, and is parsed at compile time" do
+      assert %Zizq.PayloadHasher{except: [[key: "events"]]} = Digest.new(%{}).batch.key
+    end
+
+    # What an enqueue contributes is exactly what should not split the
+    # batch; everything else about it should.
+    test "each enqueue derives its key from its own payload" do
+      a = Zizq.Enqueue.to_wire(Digest.new(%{"tenant_id" => 1, "events" => [1]}))
+      b = Zizq.Enqueue.to_wire(Digest.new(%{"tenant_id" => 1, "events" => [2, 3]}))
+      c = Zizq.Enqueue.to_wire(Digest.new(%{"tenant_id" => 2, "events" => [1]}))
+
+      assert a["batch"]["key"] == b["batch"]["key"]
+      refute a["batch"]["key"] == c["batch"]["key"]
+      assert "digest:" <> _ = a["batch"]["key"]
+    end
+
+    test "an omitted path batches the whole payload" do
+      wire = Zizq.Enqueue.to_wire(Audit.new([%{"a" => 1}]))
+
+      assert wire["batch"]["when"] == "(($existing | .) + ($new | .)) | length <= 1000"
+      assert wire["batch"]["fold"] == "$existing | . += ($new | .)"
+    end
+
+    # Nothing is left to distinguish them once the whole payload is the
+    # batch, so every job of the type shares one.
+    test "a whole-payload batch is one batch per job type" do
+      a = Zizq.Enqueue.to_wire(Audit.new([%{"a" => 1}]))
+      b = Zizq.Enqueue.to_wire(Audit.new([%{"b" => 2}]))
+
+      assert a["batch"]["key"] == b["batch"]["key"]
+      assert "audit:" <> _ = a["batch"]["key"]
+    end
+
+    test "the fold mode carries through from the module" do
+      defmodule Deduped do
+        use Zizq.JobKind, type: "deduped", batch: [limit: 10, path: ".ids", dedup: true]
+
+        @impl Zizq.JobKind
+        def perform(_), do: :ok
+      end
+
+      wire = Zizq.Enqueue.to_wire(Deduped.new(%{"ids" => []}))
+
+      assert wire["batch"]["fold"] == "$existing | .ids = ((.ids) + ($new | .ids) | unique)"
+    end
+
+    test "the expressions can still be written by hand" do
+      defmodule Counted do
+        use Zizq.JobKind,
+          type: "counted",
+          batch: [key: "k", when: "$existing.count < 10", fold: "$existing | .count += 1"]
+
+        @impl Zizq.JobKind
+        def perform(_), do: :ok
+      end
+
+      wire = Zizq.Enqueue.to_wire(Counted.new(%{}))
+
+      assert wire["batch"]["when"] == "$existing.count < 10"
+      assert wire["batch"]["key"] == "k"
+    end
+
+    test "a malformed path fails the build" do
+      assert_raise ArgumentError, ~r/must start with '\.'/, fn ->
+        compile!(~s|use Zizq.JobKind, type: "x", batch: [limit: 10, path: "events"]
+        def perform(_), do: :ok|)
+      end
+    end
+
+    # The server refuses the combination, and a job module declaring
+    # both would fail on every enqueue rather than once at build time.
+    test "a module cannot declare both a batch and a unique key" do
+      assert_raise ArgumentError, ~r/:unique_key and :batch cannot be combined/, fn ->
+        compile!(
+          ~s|use Zizq.JobKind, type: "x", unique_key: :payload, batch: [key: "k", when: "true", fold: "$new"]
+        def perform(_), do: :ok|
+        )
+      end
+    end
+  end
+
   describe "perform resolution" do
     test "dispatches to perform/1 when only it is defined" do
       assert Minimal.__zizq_perform__(%{"a" => 1}, %Zizq.Job{id: "j"}) == {:one, %{"a" => 1}}

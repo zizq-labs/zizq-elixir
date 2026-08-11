@@ -137,7 +137,7 @@ defmodule Zizq.Enqueue do
         "retention" => e.retention && Retention.to_wire(e.retention),
         "unique_key" => unique_key(e),
         "unique_while" => e.unique_while && Atom.to_string(e.unique_while),
-        "batch" => e.batch && BatchConfig.to_wire(e.batch)
+        "batch" => e.batch && BatchConfig.to_wire(e.batch, e.type, e.payload)
       }
       |> Map.reject(fn {_key, value} -> is_nil(value) end)
 
@@ -188,18 +188,16 @@ defmodule Zizq.Enqueue do
   # enqueue rather than once per call to `to_wire/1`. Declared on a job
   # module, this runs while that module compiles, so they are parsed
   # once for the life of the program.
-  defp hasher({:payload, opts}) when is_list(opts), do: Zizq.PayloadHasher.new!(opts)
-  defp hasher(:payload), do: Zizq.PayloadHasher.new!()
-  defp hasher(other), do: other
+  defp hasher(value), do: Zizq.PayloadHasher.from_option(value)
 
   # Derived here rather than at construction because this is the first
   # point at which both the type and the payload it applies to are
   # settled — a job module supplies the hasher long before either.
-  defp unique_key(%__MODULE__{unique_key: %Zizq.PayloadHasher{} = hasher} = e) do
-    Zizq.PayloadHasher.key(hasher, e.type, e.payload)
-  end
+  defp unique_key(%__MODULE__{unique_key: nil}), do: nil
 
-  defp unique_key(%__MODULE__{unique_key: key}), do: key
+  defp unique_key(%__MODULE__{} = e) do
+    Zizq.PayloadHasher.resolve(e.unique_key, e.type, e.payload)
+  end
 
   defp maybe(nil, _fun), do: nil
   defp maybe(value, fun), do: fun.(value)

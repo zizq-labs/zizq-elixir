@@ -1,5 +1,114 @@
 # Changelog
 
+## 0.6.0-alpha.5
+
+Adds the declarative layer: jobs as modules, dispatch by type, and
+keys derived from the payload for uniqueness and batching. The query
+and cron endpoints are still to come.
+
+### Added
+
+- **`Zizq.JobKind`.** Declares a kind of job — its name on the server,
+  the enqueue options it defaults to, and what running it does:
+
+      defmodule MyApp.SendEmail do
+        use Zizq.JobKind, type: "send_email", queue: "emails"
+
+        @impl Zizq.JobKind
+        def perform(%{"user_id" => id}), do: MyApp.Mailer.deliver(id)
+      end
+
+      MyApp.SendEmail.new(%{"user_id" => 42})
+      |> Zizq.enqueue(MyApp.Zizq)
+
+  `type:` is required and never inferred from the module name, so
+  renaming the module cannot silently change the wire contract other
+  languages enqueue against. Everything else is any option
+  `Zizq.Enqueue` takes, validated while the module compiles, so a
+  malformed `:backoff` is a build failure rather than a surprise at
+  the first enqueue.
+
+  Define `perform/1`, or `perform/2` to also receive the `Zizq.Job`.
+  Defining both prefers `/2`; defining neither fails at compile time.
+  The choice is resolved during compilation, so dispatch costs nothing
+  at runtime.
+
+- **`Zizq.Router`.** Dispatches jobs to the module that defines them,
+  and is accepted directly as a worker's `:handler`:
+
+      {Zizq.Worker,
+       client: MyApp.Zizq,
+       queues: ["emails"],
+       handler: Zizq.Router.new([MyApp.SendEmail, MyApp.GenerateReport])}
+
+  Routes can also be added one at a time, which suits building them
+  conditionally, and plain functions can be registered for jobs not
+  worth a module:
+
+      Zizq.Router.new()
+      |> Zizq.Router.route(MyApp.SendEmail)
+      |> Zizq.Router.route("ping", fn _payload -> :ok end)
+      |> Zizq.Router.fallback(&MyApp.unknown_job/1)
+
+  A type in no route raises `Zizq.Router.UnknownJobType`, which the
+  worker reports as a failure, so the job retries — usually right,
+  since a rolling deploy can enqueue from new code onto a worker
+  running old code. A `:fallback` handles them instead.
+
+  Types are registered, never resolved: turning a wire type into a
+  module at runtime would mean `String.to_existing_atom/1` on data
+  from the queue.
+
+- **Unique keys derived from the payload.** Deduplicate on the fields
+  that decide identity, ignoring the ones that do not:
+
+      use Zizq.JobKind,
+        type: "send_email",
+        unique_key: {:payload, only: [".user_id", ".template"]},
+        unique_while: :queued
+
+  `{:payload, except: [...]}` and `:payload` (the whole payload) are
+  the other forms, and all three work on a plain `Zizq.enqueue/2` as
+  well. Paths are jq-flavoured, and are parsed while the job module
+  compiles, so a malformed one is a build failure and no enqueue pays
+  to parse it.
+
+  `Zizq.PayloadHasher` builds the keys, hashing canonical JSON into
+  SHA-256 so that key order does not matter but structure does. Keys
+  are prefixed with the job type by default, since two kinds of job
+  with identical payloads are still different jobs.
+
+- **Batch configuration generated from a path and a limit.** Say where
+  the batch accumulates and how large it may get; the jq expressions
+  follow:
+
+      use Zizq.JobKind,
+        type: "push",
+        batch: [limit: 100, path: ".device_ids"]
+
+  The key defaults to hashing everything *except* the batch path, so
+  enqueues alike in every respect but what they contribute belong to
+  the same batch — no key needs naming. `:dedup` and `:sorted` fold
+  through jq's `unique` and `sort`. `:key`, `:when` and `:fold` can
+  still be written by hand for folds the template does not cover.
+
+### Fixed
+
+- **An enqueue that matched an existing job crashed instead of
+  returning it.** The server answers 200 rather than 201 when nothing
+  new was created — a unique job already queued, or one folded into a
+  batch — and `Zizq.enqueue/2` treated only 201 as success. The 200
+  fell through to the error path, where the status mapping had no
+  clause for it and raised `FunctionClauseError`. Both statuses are
+  now success, and the returned job carries `:duplicate` or `:folded`.
+  `Zizq.enqueue_all/2` was already correct.
+
+- **An unrecognised status now arrives as an error rather than a
+  crash.** `Zizq.Error` gains an `:unexpected_status` reason, so a
+  status an endpoint does not know how to read still surfaces as a
+  `%Zizq.Error{}` naming it, which is the whole point of there being
+  one error type.
+
 ## 0.6.0-alpha.4
 
 Adds job consumption: a supervised worker, the `/jobs/take` stream and

@@ -122,6 +122,23 @@ defmodule Zizq.PayloadHasher do
     |> Base.encode16(case: :lower)
   end
 
+  @doc false
+  # Accepts the shorthand a caller may write in place of a hasher, so
+  # `:unique_key` and a batch's `:key` take the same forms. Anything
+  # else passes through for its own option to validate.
+  @spec from_option(term()) :: term()
+  def from_option({:payload, opts}) when is_list(opts), do: new!(opts)
+  def from_option(:payload), do: new!()
+  def from_option(other), do: other
+
+  @doc false
+  # Applied at wire time rather than construction: a hasher is declared
+  # long before the payload it will be applied to, often while the job
+  # module is still compiling.
+  @spec resolve(String.t() | t(), String.t(), term()) :: String.t()
+  def resolve(%__MODULE__{} = hasher, type, payload), do: key(hasher, type, payload)
+  def resolve(key, _type, _payload) when is_binary(key), do: key
+
   # --- Selecting what participates ---
 
   defp hashable(hasher, payload) do

@@ -297,6 +297,111 @@ defmodule Zizq.EnqueueTest do
     end
   end
 
+  # The same shorthand `:unique_key` takes, so jobs batch by what they
+  # are about rather than by a key assembled at the call site.
+  describe "batch keys derived from the payload" do
+    defp batch_key(key, payload) do
+      Enqueue.new!(
+        type: "digest",
+        payload: payload,
+        batch: [key: key, when: "true", fold: "$new"]
+      )
+      |> Enqueue.to_wire()
+      |> get_in(["batch", "key"])
+    end
+
+    test "payloads agreeing on the named paths share a batch" do
+      a = batch_key({:payload, only: [".tenant_id"]}, %{"tenant_id" => 1, "n" => 9})
+      b = batch_key({:payload, only: [".tenant_id"]}, %{"tenant_id" => 1, "n" => 7})
+
+      assert a == b
+      assert "digest:" <> _ = a
+    end
+
+    test "payloads differing on them do not" do
+      a = batch_key({:payload, only: [".tenant_id"]}, %{"tenant_id" => 1})
+      b = batch_key({:payload, only: [".tenant_id"]}, %{"tenant_id" => 2})
+
+      refute a == b
+    end
+
+    test "`:payload` batches on the whole payload" do
+      assert "digest:" <> _ = batch_key(:payload, %{"tenant_id" => 1})
+      refute batch_key(:payload, %{"a" => 1}) == batch_key(:payload, %{"a" => 2})
+    end
+
+    test "`:except` batches on everything but the named paths" do
+      a = batch_key({:payload, except: [".at"]}, %{"tenant_id" => 1, "at" => "t1"})
+      b = batch_key({:payload, except: [".at"]}, %{"tenant_id" => 1, "at" => "t2"})
+
+      assert a == b
+    end
+
+    test "a hasher can be passed directly" do
+      hasher = Zizq.PayloadHasher.new!(only: [".tenant_id"])
+
+      assert batch_key(hasher, %{"tenant_id" => 1}) ==
+               batch_key({:payload, only: [".tenant_id"]}, %{"tenant_id" => 1})
+    end
+
+    test "a static string key is untouched" do
+      assert batch_key("fixed", %{"tenant_id" => 1}) == "fixed"
+    end
+
+    test "the when and fold expressions still go out verbatim" do
+      wire =
+        Enqueue.new!(
+          type: "digest",
+          payload: %{"tenant_id" => 1},
+          batch: [key: {:payload, only: [".tenant_id"]}, when: "$existing.n < 5", fold: "$new"]
+        )
+        |> Enqueue.to_wire()
+
+      assert wire["batch"]["when"] == "$existing.n < 5"
+      assert wire["batch"]["fold"] == "$new"
+    end
+
+    test "a malformed path is rejected when the enqueue is built" do
+      assert_raise ArgumentError, ~r/must start with '\.'/, fn ->
+        Enqueue.new!(type: "a", batch: [key: {:payload, only: ["x"]}, when: "true", fold: "$new"])
+      end
+    end
+
+    test "an unusable key is rejected" do
+      assert_raise ArgumentError, ~r/must be a non-empty string or a Zizq.PayloadHasher/, fn ->
+        Enqueue.new!(type: "a", batch: [key: 42, when: "true", fold: "$new"])
+      end
+    end
+
+    # Batch keys are scoped per queue on the server, but two kinds of
+    # job on one queue would otherwise collide.
+    test "the type takes part in a derived key" do
+      a =
+        Enqueue.new!(
+          type: "a",
+          payload: %{"t" => 1},
+          batch: [key: :payload, when: "true", fold: "$new"]
+        )
+
+      b =
+        Enqueue.new!(
+          type: "b",
+          payload: %{"t" => 1},
+          batch: [key: :payload, when: "true", fold: "$new"]
+        )
+
+      refute get_in(Enqueue.to_wire(a), ["batch", "key"]) ==
+               get_in(Enqueue.to_wire(b), ["batch", "key"])
+    end
+
+    test "the prefix can be turned off, for batching across types" do
+      a = batch_key({:payload, only: [".t"], prefix: false}, %{"t" => 1})
+
+      refute String.starts_with?(a, "digest:")
+      assert String.length(a) == 64
+    end
+  end
+
   describe "backoff validation" do
     test "requires all three parameters together" do
       for partial <- [[base: 1], [base: 1, jitter: 2], [exponent: 2.0]] do

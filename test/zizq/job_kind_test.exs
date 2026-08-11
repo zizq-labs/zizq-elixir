@@ -144,6 +144,91 @@ defmodule Zizq.JobKindTest do
     end
   end
 
+  describe "unique keys from the payload" do
+    defmodule Unique do
+      use Zizq.JobKind,
+        type: "unique",
+        unique_key: {:payload, only: [".user_id", ".template"]},
+        unique_while: :queued
+
+      @impl Zizq.JobKind
+      def perform(_payload), do: :ok
+    end
+
+    defp wire(enqueue), do: Zizq.Enqueue.to_wire(enqueue)
+
+    # Held as a parsed hasher rather than a string, because the key
+    # depends on the payload of each individual enqueue.
+    test "the paths are parsed when the module compiles" do
+      assert %Zizq.PayloadHasher{only: [[key: "user_id"], [key: "template"]]} =
+               Unique.new(%{}).unique_key
+    end
+
+    test "the key is derived from the payload at enqueue time" do
+      key = wire(Unique.new(%{"user_id" => 42, "template" => "welcome"}))["unique_key"]
+
+      assert "unique:" <> digest = key
+      assert String.length(digest) == 64
+    end
+
+    test "payload fields outside the paths do not change the key" do
+      a = wire(Unique.new(%{"user_id" => 42, "template" => "w", "at" => "t1"}))
+      b = wire(Unique.new(%{"user_id" => 42, "template" => "w", "at" => "t2"}))
+
+      assert a["unique_key"] == b["unique_key"]
+    end
+
+    test "a named field changing does change the key" do
+      a = wire(Unique.new(%{"user_id" => 42, "template" => "w"}))
+      b = wire(Unique.new(%{"user_id" => 43, "template" => "w"}))
+
+      refute a["unique_key"] == b["unique_key"]
+    end
+
+    test "unique_while rides along" do
+      assert wire(Unique.new(%{"user_id" => 1}))["unique_while"] == "queued"
+    end
+
+    test "a plain string key still passes straight through" do
+      defmodule StaticKey do
+        use Zizq.JobKind, type: "static", unique_key: "fixed"
+
+        @impl Zizq.JobKind
+        def perform(_), do: :ok
+      end
+
+      assert wire(StaticKey.new(%{"a" => 1}))["unique_key"] == "fixed"
+    end
+
+    test "`:payload` alone hashes the whole payload" do
+      defmodule WholePayload do
+        use Zizq.JobKind, type: "whole", unique_key: :payload
+
+        @impl Zizq.JobKind
+        def perform(_), do: :ok
+      end
+
+      a = wire(WholePayload.new(%{"a" => 1}))
+      b = wire(WholePayload.new(%{"a" => 2}))
+
+      assert "whole:" <> _ = a["unique_key"]
+      refute a["unique_key"] == b["unique_key"]
+    end
+
+    # It would otherwise be a runtime failure on the first enqueue,
+    # long after the typo was written.
+    test "a malformed path fails the build" do
+      assert_raise ArgumentError, ~r/must start with '\.'/, fn ->
+        compile!(~s|use Zizq.JobKind, type: "x", unique_key: {:payload, only: ["user_id"]}
+        def perform(_), do: :ok|)
+      end
+    end
+
+    test "an override can replace the derived key for one enqueue" do
+      assert wire(Unique.new(%{"user_id" => 1}, unique_key: "manual"))["unique_key"] == "manual"
+    end
+  end
+
   describe "perform resolution" do
     test "dispatches to perform/1 when only it is defined" do
       assert Minimal.__zizq_perform__(%{"a" => 1}, %Zizq.Job{id: "j"}) == {:one, %{"a" => 1}}

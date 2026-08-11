@@ -150,6 +150,124 @@ defmodule Zizq.EnqueueTest do
     end
   end
 
+  # A job module is the convenient way to derive a unique key, but not
+  # the only one: an enqueue built by hand takes the same shorthand,
+  # parsing its paths when the enqueue is built rather than when the
+  # module compiles.
+  describe "unique keys derived from the payload" do
+    defp key(input), do: input |> Enqueue.new!() |> Enqueue.to_wire() |> Map.get("unique_key")
+
+    test "`{:payload, only: paths}` narrows the key to those paths" do
+      a =
+        key(type: "t", payload: %{"id" => 1, "at" => "t1"}, unique_key: {:payload, only: [".id"]})
+
+      b =
+        key(type: "t", payload: %{"id" => 1, "at" => "t2"}, unique_key: {:payload, only: [".id"]})
+
+      c =
+        key(type: "t", payload: %{"id" => 2, "at" => "t1"}, unique_key: {:payload, only: [".id"]})
+
+      assert a == b
+      refute a == c
+      assert "t:" <> _ = a
+    end
+
+    test "`{:payload, except: paths}` ignores those paths" do
+      a =
+        key(
+          type: "t",
+          payload: %{"id" => 1, "at" => "t1"},
+          unique_key: {:payload, except: [".at"]}
+        )
+
+      b =
+        key(
+          type: "t",
+          payload: %{"id" => 1, "at" => "t2"},
+          unique_key: {:payload, except: [".at"]}
+        )
+
+      assert a == b
+    end
+
+    test "`:payload` hashes the whole payload" do
+      a = key(type: "t", payload: %{"id" => 1}, unique_key: :payload)
+      b = key(type: "t", payload: %{"id" => 2}, unique_key: :payload)
+
+      assert "t:" <> _ = a
+      refute a == b
+    end
+
+    test "a hasher can be passed directly" do
+      hasher = Zizq.PayloadHasher.new!(only: [".id"])
+
+      assert key(type: "t", payload: %{"id" => 1, "at" => "x"}, unique_key: hasher) ==
+               key(type: "t", payload: %{"id" => 1}, unique_key: {:payload, only: [".id"]})
+    end
+
+    test "a map of attributes takes the shorthand too" do
+      assert "t:" <> _ = key(%{type: "t", payload: %{"id" => 1}, unique_key: :payload})
+    end
+
+    # Set on a struct by hand rather than passed as attributes; the
+    # shorthand belongs to the option, not to one way of building one.
+    test "a struct built by hand takes the shorthand" do
+      enqueue = %Enqueue{type: "t", payload: %{"id" => 1}, unique_key: {:payload, only: [".id"]}}
+
+      assert key(enqueue) ==
+               key(type: "t", payload: %{"id" => 1}, unique_key: {:payload, only: [".id"]})
+    end
+
+    test "the key follows the payload, not the enqueue it was declared on" do
+      hasher = Zizq.PayloadHasher.new!(only: [".id"])
+
+      refute key(type: "t", payload: %{"id" => 1}, unique_key: hasher) ==
+               key(type: "t", payload: %{"id" => 2}, unique_key: hasher)
+    end
+
+    test "the type takes part, so two kinds with one payload differ" do
+      refute key(type: "a", payload: %{"id" => 1}, unique_key: :payload) ==
+               key(type: "b", payload: %{"id" => 1}, unique_key: :payload)
+    end
+
+    test "unique_while rides along with a derived key" do
+      wire =
+        Enqueue.new!(
+          type: "t",
+          payload: %{"id" => 1},
+          unique_key: :payload,
+          unique_while: :active
+        )
+        |> Enqueue.to_wire()
+
+      assert "t:" <> _ = wire["unique_key"]
+      assert wire["unique_while"] == "active"
+    end
+
+    test "a malformed path is rejected when the enqueue is built" do
+      assert_raise ArgumentError, ~r/must start with '\.'/, fn ->
+        Enqueue.new!(type: "t", payload: %{}, unique_key: {:payload, only: ["id"]})
+      end
+    end
+
+    test "a derived key still cannot be combined with a batch" do
+      assert_raise ArgumentError, ~r/:unique_key and :batch cannot be combined/, fn ->
+        Enqueue.new!(
+          type: "t",
+          payload: %{},
+          unique_key: :payload,
+          batch: [key: "b", when: "true", fold: "$new"]
+        )
+      end
+    end
+
+    test "an unusable value is rejected" do
+      assert_raise ArgumentError, ~r/must be a string or a Zizq.PayloadHasher/, fn ->
+        Enqueue.new!(type: "t", payload: %{}, unique_key: 42)
+      end
+    end
+  end
+
   describe "batch" do
     test "is omitted unless configured" do
       refute Map.has_key?(Enqueue.new!(type: "a") |> Enqueue.to_wire(), "batch")

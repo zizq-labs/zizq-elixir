@@ -29,8 +29,10 @@ defmodule Zizq.Enqueue do
       dead.
     * `:backoff` — a `Zizq.Backoff` policy, or a keyword list.
     * `:retention` — a `Zizq.Retention` policy, or a keyword list.
-    * `:unique_key` — enqueue-time deduplication key. Requires a Pro
-      licence on the server.
+    * `:unique_key` — enqueue-time deduplication key: a string, or a
+      `Zizq.PayloadHasher` to derive one from the payload. `:payload`
+      and `{:payload, opts}` are shorthand for the latter. Requires a
+      Pro licence on the server.
     * `:unique_while` — `:queued` (default), `:active`, or `:exists`.
     * `:batch` — a `Zizq.BatchConfig`, or a keyword list. Requires a
       Pro licence on the server.
@@ -52,7 +54,7 @@ defmodule Zizq.Enqueue do
           retry_limit: non_neg_integer() | nil,
           backoff: Backoff.t() | nil,
           retention: Retention.t() | nil,
-          unique_key: String.t() | nil,
+          unique_key: String.t() | Zizq.PayloadHasher.t() | nil,
           unique_while: :queued | :active | :exists | nil,
           batch: BatchConfig.t() | nil
         }
@@ -84,7 +86,12 @@ defmodule Zizq.Enqueue do
   like `payloads:` would silently enqueue a job with an empty payload.
   """
   @spec new!(t() | keyword() | map()) :: t()
-  def new!(%__MODULE__{} = enqueue), do: validate!(enqueue)
+  # Normalised here too, not only on the attrs path: `:unique_key`
+  # accepts the shorthand wherever it is set, and a struct built by
+  # hand is no different from one built from a keyword list.
+  def new!(%__MODULE__{} = enqueue) do
+    validate!(%{enqueue | unique_key: hasher(enqueue.unique_key)})
+  end
 
   def new!(attrs) do
     attrs = Map.new(attrs)
@@ -108,7 +115,7 @@ defmodule Zizq.Enqueue do
       retry_limit: Map.get(attrs, :retry_limit),
       backoff: attrs |> Map.get(:backoff) |> maybe(&Backoff.new!/1),
       retention: attrs |> Map.get(:retention) |> maybe(&Retention.new!/1),
-      unique_key: Map.get(attrs, :unique_key),
+      unique_key: attrs |> Map.get(:unique_key) |> hasher(),
       unique_while: Map.get(attrs, :unique_while),
       batch: attrs |> Map.get(:batch) |> maybe(&BatchConfig.new!/1)
     }
@@ -128,7 +135,7 @@ defmodule Zizq.Enqueue do
         "retry_limit" => e.retry_limit,
         "backoff" => e.backoff && Backoff.to_wire(e.backoff),
         "retention" => e.retention && Retention.to_wire(e.retention),
-        "unique_key" => e.unique_key,
+        "unique_key" => unique_key(e),
         "unique_while" => e.unique_while && Atom.to_string(e.unique_while),
         "batch" => e.batch && BatchConfig.to_wire(e.batch)
       }
@@ -156,6 +163,13 @@ defmodule Zizq.Enqueue do
             "enqueue :unique_while must be one of #{inspect(@unique_scopes)}, got #{inspect(e.unique_while)}"
     end
 
+    unless is_nil(e.unique_key) or is_binary(e.unique_key) or
+             is_struct(e.unique_key, Zizq.PayloadHasher) do
+      raise ArgumentError,
+            "enqueue :unique_key must be a string or a Zizq.PayloadHasher, " <>
+              "got #{inspect(e.unique_key)}"
+    end
+
     if e.unique_while && is_nil(e.unique_key) do
       raise ArgumentError, "enqueue :unique_while has no effect without :unique_key"
     end
@@ -169,6 +183,23 @@ defmodule Zizq.Enqueue do
 
     e
   end
+
+  # Normalised at construction so the paths are parsed once per
+  # enqueue rather than once per call to `to_wire/1`. Declared on a job
+  # module, this runs while that module compiles, so they are parsed
+  # once for the life of the program.
+  defp hasher({:payload, opts}) when is_list(opts), do: Zizq.PayloadHasher.new!(opts)
+  defp hasher(:payload), do: Zizq.PayloadHasher.new!()
+  defp hasher(other), do: other
+
+  # Derived here rather than at construction because this is the first
+  # point at which both the type and the payload it applies to are
+  # settled — a job module supplies the hasher long before either.
+  defp unique_key(%__MODULE__{unique_key: %Zizq.PayloadHasher{} = hasher} = e) do
+    Zizq.PayloadHasher.key(hasher, e.type, e.payload)
+  end
+
+  defp unique_key(%__MODULE__{unique_key: key}), do: key
 
   defp maybe(nil, _fun), do: nil
   defp maybe(value, fun), do: fun.(value)

@@ -139,7 +139,11 @@ defmodule Zizq do
     wire = enqueue |> Zizq.Enqueue.new!() |> Zizq.Enqueue.to_wire()
 
     case Zizq.HTTP.request(config, :post, "/jobs", wire) do
-      {:ok, 201, job} -> {:ok, Zizq.Job.from_wire(job)}
+      # 200 rather than 201 when the job was a duplicate of one already
+      # queued, or folded into an existing batch: nothing was created,
+      # and the existing job comes back with `:duplicate` or `:folded`
+      # set.
+      {:ok, status, job} when status in [200, 201] -> {:ok, Zizq.Job.from_wire(job)}
       {:ok, status, body} -> {:error, Zizq.Error.from_response(status, body)}
       {:error, %Zizq.Error{} = error} -> {:error, error}
     end

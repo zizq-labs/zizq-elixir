@@ -60,6 +60,9 @@ defmodule Zizq.Error do
       timeout, DNS failure, pool unavailable.
     * `:encode` — the request body could not be serialised.
     * `:decode` — the response body could not be deserialised.
+    * `:unexpected_status` — the server answered with a status this
+      endpoint does not know how to interpret. A client bug, or a
+      server newer than this client.
   """
   @type reason ::
           :not_found
@@ -72,6 +75,7 @@ defmodule Zizq.Error do
           | :transport
           | :encode
           | :decode
+          | :unexpected_status
 
   @type t :: %__MODULE__{
           reason: reason(),
@@ -161,6 +165,10 @@ defmodule Zizq.Error do
   defp reason_for_status(status) when status in [400, 422], do: :invalid_request
   defp reason_for_status(status) when status in 400..499, do: :client_error
   defp reason_for_status(status) when status >= 500, do: :server_error
+
+  # Reached when an endpoint answers with a status its caller did not
+  # expect, including unexpected 2xx.
+  defp reason_for_status(_status), do: :unexpected_status
 
   # The server reports failures as `{"error": "..."}`; prefer that text
   # over a generic message, since it names the actual problem.

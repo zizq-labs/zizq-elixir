@@ -14,64 +14,7 @@ defmodule Zizq.WorkerTest do
 
   alias Zizq.FakeServer
 
-  defp job_json(id) do
-    JSON.encode!(%{
-      "id" => id,
-      "type" => "probe",
-      "queue" => "default",
-      "status" => "in_flight",
-      "payload" => %{"id" => id},
-      "attempts" => 0
-    }) <> "\n"
-  end
-
-  # A server that streams jobs when told and records acknowledgements.
-  defp start_server! do
-    test_pid = self()
-
-    FakeServer.start_client!(
-      fn conn ->
-        case conn.request_path do
-          "/jobs/take" ->
-            send(test_pid, {:stream, self()})
-            conn = Plug.Conn.send_chunked(conn, 200)
-            stream_loop(conn)
-
-          path ->
-            {:ok, raw, conn} = Plug.Conn.read_body(conn)
-            body = if raw == "", do: nil, else: JSON.decode!(raw)
-            send(test_pid, {:ack, path, body})
-
-            if String.ends_with?(path, "/failure") do
-              FakeServer.respond(
-                conn,
-                200,
-                "application/json",
-                ~s({"id":"x","status":"scheduled","attempts":1})
-              )
-            else
-              FakeServer.respond(conn, 204, nil, "")
-            end
-        end
-      end,
-      format: :json
-    )
-  end
-
-  defp stream_loop(conn) do
-    receive do
-      {:emit, bytes} ->
-        case Plug.Conn.chunk(conn, bytes) do
-          {:ok, conn} -> stream_loop(conn)
-          {:error, :closed} -> conn
-        end
-
-      :stop ->
-        conn
-    after
-      5_000 -> conn
-    end
-  end
+  defp start_server!, do: FakeServer.start_worker_client!()
 
   defp worker_opts(name, handler, opts) do
     Keyword.merge(
@@ -90,8 +33,6 @@ defmodule Zizq.WorkerTest do
   defp start_worker!(name, handler, opts \\ []) do
     start_supervised!({Zizq.Worker, worker_opts(name, handler, opts)})
   end
-
-  defp emit_job(server, id), do: send(server, {:emit, job_json(id)})
 
   describe "the handler contract" do
     setup do
@@ -116,7 +57,7 @@ defmodule Zizq.WorkerTest do
       start_worker!(ctx.name, ctx.handler)
       assert_receive {:stream, server}
 
-      emit_job(server, "a")
+      FakeServer.emit_job(server, "a")
       assert_receive {:handled, "a", handler}
       send(handler, {:return, :ok})
 
@@ -127,7 +68,7 @@ defmodule Zizq.WorkerTest do
       start_worker!(ctx.name, ctx.handler)
       assert_receive {:stream, server}
 
-      emit_job(server, "a")
+      FakeServer.emit_job(server, "a")
       assert_receive {:handled, "a", handler}
       send(handler, {:return, {:ok, %{whatever: true}}})
 
@@ -145,7 +86,7 @@ defmodule Zizq.WorkerTest do
 
       log =
         capture_log(fn ->
-          emit_job(server, "a")
+          FakeServer.emit_job(server, "a")
           assert_receive {:handled, "a", handler}
           send(handler, {:return, %{rows: 1}})
 
@@ -167,7 +108,7 @@ defmodule Zizq.WorkerTest do
 
       log =
         capture_log(fn ->
-          emit_job(server, "a")
+          FakeServer.emit_job(server, "a")
           assert_receive {:handled, "a", handler}
           send(handler, {:return, :error})
 
@@ -188,7 +129,7 @@ defmodule Zizq.WorkerTest do
 
       log =
         capture_log(fn ->
-          emit_job(server, "a")
+          FakeServer.emit_job(server, "a")
           assert_receive {:handled, "a", handler}
           send(handler, {:return, {:eror, "typo"}})
 
@@ -202,7 +143,7 @@ defmodule Zizq.WorkerTest do
       start_worker!(ctx.name, ctx.handler)
       assert_receive {:stream, server}
 
-      emit_job(server, "a")
+      FakeServer.emit_job(server, "a")
       assert_receive {:handled, "a", handler}
       send(handler, {:return, {:error, "SMTP timeout"}})
 
@@ -215,7 +156,7 @@ defmodule Zizq.WorkerTest do
       start_worker!(ctx.name, ctx.handler)
       assert_receive {:stream, server}
 
-      emit_job(server, "a")
+      FakeServer.emit_job(server, "a")
       assert_receive {:handled, "a", handler}
       send(handler, {:return, {:cancel, :customer_deleted}})
 
@@ -230,7 +171,7 @@ defmodule Zizq.WorkerTest do
       start_worker!(ctx.name, ctx.handler)
       assert_receive {:stream, server}
 
-      emit_job(server, "a")
+      FakeServer.emit_job(server, "a")
       assert_receive {:handled, "a", handler}
       send(handler, {:return, {:snooze, :timer.minutes(1)}})
 
@@ -248,7 +189,7 @@ defmodule Zizq.WorkerTest do
 
       at = DateTime.add(DateTime.utc_now(), 3_600, :second)
 
-      emit_job(server, "a")
+      FakeServer.emit_job(server, "a")
       assert_receive {:handled, "a", handler}
       send(handler, {:return, {:snooze, at}})
 
@@ -263,7 +204,7 @@ defmodule Zizq.WorkerTest do
       start_worker!(name, fn _job -> raise ArgumentError, "handler blew up" end)
 
       assert_receive {:stream, server}
-      emit_job(server, "a")
+      FakeServer.emit_job(server, "a")
 
       assert_receive {:ack, "/jobs/a/failure", body}
       assert body["message"] == "handler blew up"
@@ -276,7 +217,7 @@ defmodule Zizq.WorkerTest do
       start_worker!(name, fn _job -> exit(:something_went_wrong) end)
 
       assert_receive {:stream, server}
-      emit_job(server, "a")
+      FakeServer.emit_job(server, "a")
 
       assert_receive {:ack, "/jobs/a/failure", body}
       assert body["message"] =~ "something_went_wrong"
@@ -295,10 +236,10 @@ defmodule Zizq.WorkerTest do
 
       assert_receive {:stream, server}
 
-      emit_job(server, "boom")
+      FakeServer.emit_job(server, "boom")
       assert_receive {:ack, "/jobs/boom/failure", _}
 
-      emit_job(server, "after")
+      FakeServer.emit_job(server, "after")
       assert_receive {:survived, "after"}
     end
   end
@@ -323,7 +264,7 @@ defmodule Zizq.WorkerTest do
       )
 
       assert_receive {:stream, server}
-      for id <- ["a", "b", "c", "d"], do: emit_job(server, id)
+      for id <- ["a", "b", "c", "d"], do: FakeServer.emit_job(server, id)
 
       assert_receive {:started, _, first}
       assert_receive {:started, _, second}
@@ -363,8 +304,8 @@ defmodule Zizq.WorkerTest do
       )
 
       assert_receive {:stream, server}
-      emit_job(server, "a")
-      emit_job(server, "b")
+      FakeServer.emit_job(server, "a")
+      FakeServer.emit_job(server, "b")
 
       assert_receive {:started, "a", first}
       refute_receive {:started, "b", _}, 200
@@ -398,7 +339,7 @@ defmodule Zizq.WorkerTest do
         Zizq.Worker.start_link(worker_opts(name, handler, drain_timeout: 5_000))
 
       assert_receive {:stream, server}
-      emit_job(server, "a")
+      FakeServer.emit_job(server, "a")
       assert_receive {:started, "a", handler_pid}
 
       # Stopping blocks until the drain completes, so it runs
@@ -437,7 +378,7 @@ defmodule Zizq.WorkerTest do
       {:ok, worker} = Zizq.Worker.start_link(worker_opts(name, handler, drain_timeout: 5_000))
 
       assert_receive {:stream, server}
-      emit_job(server, "a")
+      FakeServer.emit_job(server, "a")
       assert_receive {:started, "a", handler_pid}
 
       stopper = Task.async(fn -> Supervisor.stop(worker) end)
@@ -448,7 +389,7 @@ defmodule Zizq.WorkerTest do
       # than landing in the pre-shutdown queue.
       refute_receive {:ack, _, _}, 200
 
-      emit_job(server, "b")
+      FakeServer.emit_job(server, "b")
 
       # The real assertion, and it has to happen here rather than after
       # the worker stops: "b" needs long enough to travel the stream and
@@ -480,7 +421,7 @@ defmodule Zizq.WorkerTest do
       {:ok, worker} = Zizq.Worker.start_link(worker_opts(name, handler, drain_timeout: 300))
 
       assert_receive {:stream, server}
-      emit_job(server, "a")
+      FakeServer.emit_job(server, "a")
       assert_receive {:started, "a"}
 
       # A handler that never returns must not hold shutdown open. The

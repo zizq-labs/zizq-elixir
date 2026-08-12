@@ -41,17 +41,6 @@ defmodule Zizq.TelemetryTest do
   @enqueue_events [[:zizq, :enqueue, :start], [:zizq, :enqueue, :stop]]
   @job_events [[:zizq, :job, :start], [:zizq, :job, :stop], [:zizq, :job, :exception]]
 
-  defp job_json(id) do
-    JSON.encode!(%{
-      "id" => id,
-      "type" => "probe",
-      "queue" => "default",
-      "status" => "in_flight",
-      "payload" => %{},
-      "attempts" => 2
-    }) <> "\n"
-  end
-
   describe "[:zizq, :enqueue, _]" do
     # Attached here rather than in `setup`, since the client's name is
     # what scopes the handler and it does not exist until now.
@@ -139,43 +128,7 @@ defmodule Zizq.TelemetryTest do
       worker = :"tw_#{System.unique_integer([:positive])}"
       attach(@job_events, worker)
 
-      test_pid = self()
-
-      name =
-        FakeServer.start_client!(
-          fn conn ->
-            case conn.request_path do
-              "/jobs/take" ->
-                send(test_pid, {:stream, self()})
-                conn = Plug.Conn.send_chunked(conn, 200)
-
-                receive do
-                  {:emit, bytes} ->
-                    {:ok, conn} = Plug.Conn.chunk(conn, bytes)
-                    receive do: (:stop -> conn), after: (2_000 -> conn)
-                after
-                  2_000 -> conn
-                end
-
-              # A failure report expects the updated job back, not a
-              # 204. Answering 204 makes the acker log an error from
-              # its own process, after the test has finished and so
-              # outside `capture_log`.
-              path ->
-                if String.ends_with?(path, "/failure") do
-                  FakeServer.respond(
-                    conn,
-                    200,
-                    "application/json",
-                    ~s({"id":"a","type":"probe","queue":"default","status":"scheduled","attempts":1})
-                  )
-                else
-                  FakeServer.respond(conn, 204, nil, "")
-                end
-            end
-          end,
-          format: :json
-        )
+      name = FakeServer.start_worker_client!()
 
       %{name: name, worker: worker}
     end
@@ -191,7 +144,7 @@ defmodule Zizq.TelemetryTest do
     test "a start and a stop around each job", ctx do
       worker = start_worker!(ctx, fn _job -> :ok end)
       assert_receive {:stream, server}
-      send(server, {:emit, job_json("a")})
+      FakeServer.emit_job(server, "a", %{"attempts" => 2})
 
       assert_receive {:telemetry, [:zizq, :job, :start], measurements, metadata}
       assert Map.has_key?(measurements, :system_time)
@@ -212,7 +165,7 @@ defmodule Zizq.TelemetryTest do
     test "the name distinguishes one worker's jobs from another's", ctx do
       worker = start_worker!(ctx, fn _job -> :ok end)
       assert_receive {:stream, server}
-      send(server, {:emit, job_json("a")})
+      FakeServer.emit_job(server, "a", %{"attempts" => 2})
 
       assert_receive {:telemetry, [:zizq, :job, :stop], _measurements, metadata}
       assert metadata.worker == worker
@@ -230,7 +183,7 @@ defmodule Zizq.TelemetryTest do
       test "an outcome of #{inspect(outcome)} is reported for #{inspect(return)}", ctx do
         start_worker!(ctx, fn _job -> unquote(Macro.escape(return)) end)
         assert_receive {:stream, server}
-        send(server, {:emit, job_json("a")})
+        FakeServer.emit_job(server, "a", %{"attempts" => 2})
 
         assert_receive {:telemetry, [:zizq, :job, :stop], _measurements, metadata}
         assert metadata.outcome == unquote(outcome)
@@ -242,7 +195,7 @@ defmodule Zizq.TelemetryTest do
     test "a raising handler produces an exception, not a stop", ctx do
       start_worker!(ctx, fn _job -> raise ArgumentError, "boom" end)
       assert_receive {:stream, server}
-      send(server, {:emit, job_json("a")})
+      FakeServer.emit_job(server, "a", %{"attempts" => 2})
 
       assert_receive {:telemetry, [:zizq, :job, :exception], measurements, metadata}
       assert is_integer(measurements.duration)

@@ -36,6 +36,7 @@ defmodule Zizq.Worker.Runner do
       # a router costs exactly what dispatching through a plain
       # function does.
       handler: to_handler(Keyword.fetch!(opts, :handler)),
+      worker: Keyword.fetch!(opts, :worker),
       acker: Keyword.fetch!(opts, :acker),
       tasks: Keyword.fetch!(opts, :tasks),
       concurrency: Keyword.fetch!(opts, :concurrency),
@@ -162,10 +163,28 @@ defmodule Zizq.Worker.Runner do
   defp start_job(job, state) do
     handler = state.handler
 
+    meta = %{
+      worker: state.worker,
+      id: job.id,
+      type: job.type,
+      queue: job.queue,
+      attempts: job.attempts
+    }
+
     task =
       Task.Supervisor.async_nolink(
         state.tasks,
-        fn -> handler.(job) end,
+        # Spanned inside the task, so a handler that raises produces
+        # `:exception` rather than `:stop` and the duration covers the
+        # handler alone, not the wait for a free slot.
+        fn ->
+          Zizq.Telemetry.span([:job], meta, fn ->
+            result = handler.(job)
+            # The whole map, not just the outcome: `span/3` replaces
+            # the start metadata rather than merging into it.
+            {result, Map.put(meta, :outcome, outcome(result))}
+          end)
+        end,
         # Short on purpose. A task is only killed once the runner's
         # drain has already given it the full drain timeout and decided
         # to abandon it, so waiting out the 5s default would delay
@@ -236,6 +255,17 @@ defmodule Zizq.Worker.Runner do
 
     Acker.success(state.acker, job)
   end
+
+  # What the handler's return value was understood as, reported on
+  # `[:zizq, :job, :stop]` so a counter needs no second opinion about
+  # which returns are failures.
+  defp outcome(:ok), do: :ok
+  defp outcome({:ok, _value}), do: :ok
+  defp outcome({:error, _reason}), do: :error
+  defp outcome({:cancel, _reason}), do: :cancel
+  defp outcome({:snooze, milliseconds}) when is_integer(milliseconds), do: :snooze
+  defp outcome({:snooze, %DateTime{}}), do: :snooze
+  defp outcome(_other), do: :unknown
 
   defp describe(reason) when is_binary(reason), do: reason
 

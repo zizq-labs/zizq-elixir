@@ -37,6 +37,11 @@ defmodule Zizq.MixProject do
       {:msgpax, "~> 2.4"},
       {:nimble_options, "~> 1.1"},
 
+      # Used directly for the events in `Zizq.Telemetry`. Arrives
+      # transitively via Finch regardless, so declaring it costs
+      # nothing.
+      {:telemetry, "~> 1.0"},
+
       # Test-only fake server. Bandit rather than the more usual Bypass
       # because Bypass is Cowboy-backed and HTTP/1.1 only, while this
       # client's pool is h2c-exclusive. Bypass literally cannot answer

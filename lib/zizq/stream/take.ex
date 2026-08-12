@@ -233,7 +233,9 @@ defmodule Zizq.Stream.Take do
   end
 
   defp handle_response({:status, ref, 200}, %{ref: ref} = state) do
-    send_owner(state, {:connected, Config.url(state.config)})
+    url = Config.url(state.config)
+    send_owner(state, {:connected, url})
+    Zizq.Telemetry.emit([:stream, :connect], %{client: state.config.name, url: url})
 
     # Backoff resets here, not on socket connect. A server that accepts
     # connections but rejects every request would otherwise reset the
@@ -318,6 +320,7 @@ defmodule Zizq.Stream.Take do
   defp disconnected(state, reason) do
     if state.conn, do: Mint.HTTP.close(state.conn)
     send_owner(state, {:disconnected, reason})
+    Zizq.Telemetry.emit([:stream, :disconnect], %{client: state.config.name, reason: reason})
 
     state = cancel_idle_timer(state)
     state = %{state | conn: nil, ref: nil, framer: nil, failure: nil}

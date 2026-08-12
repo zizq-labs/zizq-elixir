@@ -372,7 +372,7 @@ defmodule Zizq do
       %{
         "error_type" => Map.get(opts, :error_type),
         "backtrace" => Map.get(opts, :backtrace),
-        "retry_at" => failure_retry_at(Map.get(opts, :retry_at)),
+        "retry_at" => Zizq.Timestamp.to_ms(Map.get(opts, :retry_at)),
         # Omitted unless true: the server defaults it to false, and
         # sending it needlessly would suggest it were meaningful.
         "kill" => if(Map.get(opts, :kill), do: true)
@@ -381,10 +381,6 @@ defmodule Zizq do
 
     Map.put(optional, "message", message)
   end
-
-  defp failure_retry_at(nil), do: nil
-  defp failure_retry_at(%DateTime{} = at), do: DateTime.to_unix(at, :millisecond)
-  defp failure_retry_at(ms) when is_integer(ms), do: ms
 
   defp job_id(%Zizq.Job{id: id}), do: id
   defp job_id(id) when is_binary(id), do: id
@@ -407,6 +403,173 @@ defmodule Zizq do
       {:ok, 200, %{"version" => version}} -> {:ok, version}
       {:ok, status, body} -> {:error, Zizq.Error.from_response(status, body)}
       {:error, %Zizq.Error{} = error} -> {:error, error}
+    end
+  end
+
+  @doc """
+  Read one job by id.
+
+      Zizq.get_job(job.id, MyApp.Zizq)
+      #=> {:ok, %Zizq.Job{status: :completed}}
+
+  Unlike the job returned by `enqueue/2`, this one carries its
+  `:payload`.
+
+  A job the server no longer holds is `{:error, %Zizq.Error{reason:
+  :not_found}}` — which a completed job becomes as soon as its
+  retention expires, immediately by default.
+  """
+  @spec get_job(Zizq.Job.t() | String.t(), atom()) ::
+          {:ok, Zizq.Job.t()} | {:error, Zizq.Error.t()}
+  def get_job(job, name) when is_atom(name) do
+    config = Config.fetch!(name)
+
+    case Zizq.HTTP.request(config, :get, "/jobs/#{job_id(job)}") do
+      {:ok, 200, body} -> {:ok, Zizq.Job.from_wire(body)}
+      {:ok, status, body} -> {:error, Zizq.Error.from_response(status, body)}
+      {:error, %Zizq.Error{} = error} -> {:error, error}
+    end
+  end
+
+  @doc """
+  Read one job by id, raising on failure.
+  """
+  @spec get_job!(Zizq.Job.t() | String.t(), atom()) :: Zizq.Job.t()
+  def get_job!(job, name) do
+    case get_job(job, name) do
+      {:ok, job} -> job
+      {:error, error} -> raise error
+    end
+  end
+
+  @doc """
+  Change a job that has not finished yet, and return it as it now stands.
+
+      Zizq.update_job(job, MyApp.Zizq, queue: "urgent", priority: 0)
+
+  ## Options
+
+  Only the options given are touched; the rest of the job is left
+  alone. Passing `nil` **clears** a field to the server's default,
+  which is why an option must be omitted rather than set to `nil` to
+  leave it as it is:
+
+      # Retry with the server's default limit, whatever it now is.
+      Zizq.update_job(job, MyApp.Zizq, retry_limit: nil)
+
+    * `:queue` — move the job to another queue. Cannot be `nil`.
+    * `:priority` — lower runs sooner. Cannot be `nil`.
+    * `:ready_at` — a `DateTime` or Unix milliseconds. `nil` makes the
+      job ready immediately.
+    * `:retry_limit` — `nil` restores the server default.
+    * `:backoff` — a `Zizq.Backoff` or keyword list. `nil` restores the
+      server default.
+    * `:retention` — a `Zizq.Retention` or keyword list, merged field
+      by field, so `retention: [completed: :timer.hours(1)]` leaves
+      `:dead` alone. `nil` clears the whole override.
+
+  Only jobs that have not finished can be changed: the server rejects
+  a completed or dead job with `%Zizq.Error{reason: :invalid_request}`.
+  """
+  @spec update_job(Zizq.Job.t() | String.t(), atom(), keyword()) ::
+          {:ok, Zizq.Job.t()} | {:error, Zizq.Error.t()}
+  def update_job(job, name, opts) when is_atom(name) do
+    config = Config.fetch!(name)
+    wire = patch_body(opts)
+
+    case Zizq.HTTP.request(config, :patch, "/jobs/#{job_id(job)}", wire) do
+      {:ok, 200, body} -> {:ok, Zizq.Job.from_wire(body)}
+      {:ok, status, body} -> {:error, Zizq.Error.from_response(status, body)}
+      {:error, %Zizq.Error{} = error} -> {:error, error}
+    end
+  end
+
+  @doc """
+  Change a job, raising on failure.
+  """
+  @spec update_job!(Zizq.Job.t() | String.t(), atom(), keyword()) :: Zizq.Job.t()
+  def update_job!(job, name, opts) do
+    case update_job(job, name, opts) do
+      {:ok, job} -> job
+      {:error, error} -> raise error
+    end
+  end
+
+  @patch_keys [:queue, :priority, :ready_at, :retry_limit, :backoff, :retention]
+  @patch_non_nullable [:queue, :priority]
+
+  # Absent, `nil` and a value are three different instructions here —
+  # leave alone, clear to the server's default, and set — so this maps
+  # them onto JSON merge patch rather than compacting `nil` away as
+  # `Zizq.Enqueue.to_wire/1` does.
+  defp patch_body(opts) do
+    opts = Map.new(opts)
+
+    case Map.keys(opts) -- @patch_keys do
+      [] ->
+        :ok
+
+      unknown ->
+        raise ArgumentError,
+              "unknown update key#{if length(unknown) > 1, do: "s"}: #{inspect(unknown)}. " <>
+                "Known keys are #{inspect(@patch_keys)}"
+    end
+
+    if opts == %{} do
+      raise ArgumentError, "update_job/3 needs at least one field to change"
+    end
+
+    # Rejected here rather than by the server, which answers 422 with
+    # the same complaint after a round trip.
+    Enum.each(@patch_non_nullable, fn key ->
+      if Map.get(opts, key, :absent) == nil do
+        raise ArgumentError,
+              "update :#{key} cannot be nil — it has no server default to clear to. " <>
+                "Omit it to leave the job's #{key} unchanged."
+      end
+    end)
+
+    Map.new(opts, fn {key, value} -> {Atom.to_string(key), patch_value(key, value)} end)
+  end
+
+  defp patch_value(_key, nil), do: nil
+  defp patch_value(:ready_at, value), do: Zizq.Timestamp.to_ms(value)
+  defp patch_value(:backoff, value), do: value |> Zizq.Backoff.new!() |> Zizq.Backoff.to_wire()
+
+  defp patch_value(:retention, value),
+    do: value |> Zizq.Retention.new!() |> Zizq.Retention.to_wire()
+
+  defp patch_value(_key, value), do: value
+
+  @doc """
+  Delete a job outright.
+
+      Zizq.delete_job(job, MyApp.Zizq)
+      #=> :ok
+
+  Unlike `report_failure/3` with `kill: true`, which leaves a dead job
+  behind to be inspected, this removes it. A job the server no longer
+  holds is `{:error, %Zizq.Error{reason: :not_found}}`.
+  """
+  @spec delete_job(Zizq.Job.t() | String.t(), atom()) :: :ok | {:error, Zizq.Error.t()}
+  def delete_job(job, name) when is_atom(name) do
+    config = Config.fetch!(name)
+
+    case Zizq.HTTP.request(config, :delete, "/jobs/#{job_id(job)}") do
+      {:ok, 204, _body} -> :ok
+      {:ok, status, body} -> {:error, Zizq.Error.from_response(status, body)}
+      {:error, %Zizq.Error{} = error} -> {:error, error}
+    end
+  end
+
+  @doc """
+  Delete a job outright, raising on failure.
+  """
+  @spec delete_job!(Zizq.Job.t() | String.t(), atom()) :: :ok
+  def delete_job!(job, name) do
+    case delete_job(job, name) do
+      :ok -> :ok
+      {:error, error} -> raise error
     end
   end
 end

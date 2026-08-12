@@ -131,7 +131,7 @@ defmodule Zizq.Enqueue do
     optional =
       %{
         "priority" => e.priority,
-        "ready_at" => unix_ms(e.ready_at),
+        "ready_at" => Zizq.Timestamp.to_ms(e.ready_at),
         "retry_limit" => e.retry_limit,
         "backoff" => e.backoff && Backoff.to_wire(e.backoff),
         "retention" => e.retention && Retention.to_wire(e.retention),
@@ -201,10 +201,6 @@ defmodule Zizq.Enqueue do
 
   defp maybe(nil, _fun), do: nil
   defp maybe(value, fun), do: fun.(value)
-
-  defp unix_ms(nil), do: nil
-  defp unix_ms(%DateTime{} = at), do: DateTime.to_unix(at, :millisecond)
-  defp unix_ms(ms) when is_integer(ms), do: ms
 
   defp plural([_]), do: "key"
   defp plural(_), do: "keys"

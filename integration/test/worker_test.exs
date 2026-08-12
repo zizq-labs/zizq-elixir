@@ -23,18 +23,6 @@ defmodule Zizq.Integration.WorkerTest do
     |> Zizq.enqueue!(:wk)
   end
 
-  defp fetch_job!(url, id) do
-    {:ok, {{_, 200, _}, _headers, body}} =
-      :httpc.request(
-        :get,
-        {~c"#{url}/jobs/#{id}", [{~c"accept", ~c"application/json"}]},
-        [],
-        body_format: :binary
-      )
-
-    JSON.decode!(body)
-  end
-
   defp start_worker!(ctx, handler, opts \\ []) do
     opts =
       Keyword.merge(
@@ -88,7 +76,7 @@ defmodule Zizq.Integration.WorkerTest do
     assert Enum.sort(received) == Enum.to_list(1..10)
 
     eventually(fn ->
-      Enum.all?(jobs, &(fetch_job!(ctx.url, &1.id)["status"] == "completed"))
+      Enum.all?(jobs, &(Zizq.get_job!(&1.id, :wk).status == :completed))
     end)
   end
 
@@ -128,8 +116,8 @@ defmodule Zizq.Integration.WorkerTest do
     start_worker!(ctx, fn _job -> {:error, "SMTP timeout"} end)
 
     eventually(fn ->
-      stored = fetch_job!(ctx.url, job.id)
-      stored["attempts"] == 1 and stored["status"] == "scheduled"
+      stored = Zizq.get_job!(job.id, :wk)
+      stored.attempts == 1 and stored.status == :scheduled
     end)
   end
 
@@ -138,7 +126,7 @@ defmodule Zizq.Integration.WorkerTest do
 
     start_worker!(ctx, fn _job -> raise ArgumentError, "handler blew up" end)
 
-    eventually(fn -> fetch_job!(ctx.url, job.id)["attempts"] == 1 end)
+    eventually(fn -> Zizq.get_job!(job.id, :wk).attempts == 1 end)
 
     {:ok, {{_, 200, _}, _, body}} =
       :httpc.request(
@@ -159,7 +147,7 @@ defmodule Zizq.Integration.WorkerTest do
 
     start_worker!(ctx, fn _job -> {:cancel, :customer_deleted} end)
 
-    eventually(fn -> fetch_job!(ctx.url, job.id)["status"] == "dead" end)
+    eventually(fn -> Zizq.get_job!(job.id, :wk).status == :dead end)
   end
 
   test "{:snooze, milliseconds} defers the job", ctx do
@@ -168,10 +156,11 @@ defmodule Zizq.Integration.WorkerTest do
     start_worker!(ctx, fn _job -> {:snooze, :timer.hours(1)} end)
 
     eventually(fn ->
-      stored = fetch_job!(ctx.url, job.id)
+      stored = Zizq.get_job!(job.id, :wk)
 
-      stored["status"] == "scheduled" and
-        stored["ready_at"] > System.system_time(:millisecond) + 3_000_000
+      stored.status == :scheduled and
+        DateTime.to_unix(stored.ready_at, :millisecond) >
+          System.system_time(:millisecond) + 3_000_000
     end)
   end
 
@@ -206,6 +195,6 @@ defmodule Zizq.Integration.WorkerTest do
     Task.await(stopper, 10_000)
 
     # Completed, not left in flight for redelivery.
-    assert fetch_job!(ctx.url, job.id)["status"] == "completed"
+    assert Zizq.get_job!(job.id, :wk).status == :completed
   end
 end

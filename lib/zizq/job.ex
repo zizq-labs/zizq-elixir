@@ -108,11 +108,11 @@ defmodule Zizq.Job do
       backoff: sub(wire["backoff"], &Backoff.from_wire/1),
       retention: sub(wire["retention"], &Retention.from_wire/1),
       batch: sub(wire["batch"], &BatchConfig.from_wire/1),
-      ready_at: timestamp(wire["ready_at"]),
-      dequeued_at: timestamp(wire["dequeued_at"]),
-      failed_at: timestamp(wire["failed_at"]),
-      completed_at: timestamp(wire["completed_at"]),
-      purge_at: timestamp(wire["purge_at"])
+      ready_at: Zizq.Timestamp.from_ms(wire["ready_at"]),
+      dequeued_at: Zizq.Timestamp.from_ms(wire["dequeued_at"]),
+      failed_at: Zizq.Timestamp.from_ms(wire["failed_at"]),
+      completed_at: Zizq.Timestamp.from_ms(wire["completed_at"]),
+      purge_at: Zizq.Timestamp.from_ms(wire["purge_at"])
     }
   end
 
@@ -121,7 +121,4 @@ defmodule Zizq.Job do
 
   defp sub(nil, _fun), do: nil
   defp sub(value, fun), do: fun.(value)
-
-  defp timestamp(nil), do: nil
-  defp timestamp(ms) when is_integer(ms), do: DateTime.from_unix!(ms, :millisecond)
 end

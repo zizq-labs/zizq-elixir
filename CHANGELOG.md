@@ -1,5 +1,90 @@
 # Changelog
 
+## 0.6.0-alpha.6
+
+Adds observability and test support: telemetry events for jobs,
+enqueues and the worker's take stream, and helpers for asserting on
+what was enqueued without a server. The query and cron endpoints are
+still to come.
+
+### Added
+
+- **Telemetry events.** Attach with `:telemetry.attach_many/4`, or
+  point `Telemetry.Metrics` at them. Nothing needs configuring, and an
+  event with no handlers costs only the emit:
+
+  | Event | Shape |
+  | --- | --- |
+  | `[:zizq, :job, :start \| :stop \| :exception]` | span, one per job |
+  | `[:zizq, :enqueue, :start \| :stop \| :exception]` | span, one per call |
+  | `[:zizq, :stream, :connect \| :disconnect]` | single event |
+
+  Job events carry `:worker`, `:id`, `:type`, `:queue` and
+  `:attempts`, and `:stop` adds an `:outcome` of `:ok`, `:error`,
+  `:cancel`, `:snooze` or `:unknown` — so a counter does not have to
+  work out for itself which returns were failures. A handler that
+  raises produces `:exception` instead of `:stop`, meaning a count of
+  `:stop` alone undercounts.
+
+  Enqueue events are one span per *call*, not per job: a bulk enqueue
+  of a thousand jobs is one request and one span, with `:count` set
+  and `:type`/`:queue` `nil`. A rejected enqueue returns an error
+  rather than raising, so it arrives as a `:stop` carrying
+  `outcome: :error` and the `Zizq.Error` — count both that and
+  `:exception` to catch every failure.
+
+  `Zizq.Telemetry` documents every event and its metadata.
+
+- **`Zizq.Testing`.** Assert on what your code enqueued, and run
+  handlers, without a server:
+
+      defmodule MyApp.SignupTest do
+        use ExUnit.Case, async: true
+        use Zizq.Testing, client: MyApp.Zizq
+
+        test "signing up sends a welcome email" do
+          MyApp.Signup.run("ada@example.com")
+
+          assert_enqueued(type: "send_email", payload: %{"template" => "welcome"})
+        end
+      end
+
+  Start the recorder once in `test/test_helper.exs` with
+  `Zizq.Testing.start_link()`.
+
+  A client set up this way records enqueues instead of sending them,
+  and answers with a `Zizq.Job` as the server would. The diversion
+  happens at the request itself, so everything above it runs
+  unchanged — option validation, payload-derived unique and batch
+  keys, and telemetry all behave as they do in production.
+
+  Recordings belong to the test that made them rather than to the
+  client, so a fixed client name is safe under `async: true`.
+  Enqueues from a `Task` count too: `$callers` is followed to find the
+  test that started it.
+
+  Alongside `assert_enqueued/1`, `refute_enqueued/1` and
+  `all_enqueued/1`:
+
+    * `perform_job/3` runs one handler and returns what it returned,
+      including `{:error, reason}`, so a test asserts on the outcome
+      rather than on what a worker would have made of it.
+    * `drain_enqueued/2` runs every enqueued job through a handler or
+      a `Zizq.Router` and returns how many ran. `recursive: true`
+      keeps going until nothing new is enqueued, for handlers that
+      enqueue further work, bounded by `:max_iterations`.
+
+  Payloads are normalised through JSON on the way in, exactly as they
+  are on the way to a real server, so a payload enqueued as
+  `%{user_id: 1}` records and matches as `%{"user_id" => 1}` — and a
+  handler under `perform_job/3` receives the string keys it would
+  receive in production.
+
+  Both `perform_job/3` and `drain_enqueued/2` fail the test if a
+  handler returns something Zizq does not recognise. A worker
+  acknowledges such a job and logs a warning, since by then the work
+  is done; a test is where that is cheapest to catch.
+
 ## 0.6.0-alpha.5
 
 Adds the declarative layer: jobs as modules, dispatch by type, and

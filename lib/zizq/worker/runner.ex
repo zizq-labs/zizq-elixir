@@ -256,16 +256,21 @@ defmodule Zizq.Worker.Runner do
     Acker.success(state.acker, job)
   end
 
+  @doc false
   # What the handler's return value was understood as, reported on
   # `[:zizq, :job, :stop]` so a counter needs no second opinion about
   # which returns are failures.
-  defp outcome(:ok), do: :ok
-  defp outcome({:ok, _value}), do: :ok
-  defp outcome({:error, _reason}), do: :error
-  defp outcome({:cancel, _reason}), do: :cancel
-  defp outcome({:snooze, milliseconds}) when is_integer(milliseconds), do: :snooze
-  defp outcome({:snooze, %DateTime{}}), do: :snooze
-  defp outcome(_other), do: :unknown
+  #
+  # Public so `Zizq.Testing` can reject in a test what the worker would
+  # only warn about at runtime. One definition, so the two cannot
+  # disagree about which returns are recognised.
+  def outcome(:ok), do: :ok
+  def outcome({:ok, _value}), do: :ok
+  def outcome({:error, _reason}), do: :error
+  def outcome({:cancel, _reason}), do: :cancel
+  def outcome({:snooze, milliseconds}) when is_integer(milliseconds), do: :snooze
+  def outcome({:snooze, %DateTime{}}), do: :snooze
+  def outcome(_other), do: :unknown
 
   defp describe(reason) when is_binary(reason), do: reason
 

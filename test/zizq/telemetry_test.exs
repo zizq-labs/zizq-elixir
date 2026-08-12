@@ -157,8 +157,21 @@ defmodule Zizq.TelemetryTest do
                   2_000 -> conn
                 end
 
-              _ ->
-                FakeServer.respond(conn, 204, nil, "")
+              # A failure report expects the updated job back, not a
+              # 204. Answering 204 makes the acker log an error from
+              # its own process, after the test has finished and so
+              # outside `capture_log`.
+              path ->
+                if String.ends_with?(path, "/failure") do
+                  FakeServer.respond(
+                    conn,
+                    200,
+                    "application/json",
+                    ~s({"id":"a","type":"probe","queue":"default","status":"scheduled","attempts":1})
+                  )
+                else
+                  FakeServer.respond(conn, 204, nil, "")
+                end
             end
           end,
           format: :json

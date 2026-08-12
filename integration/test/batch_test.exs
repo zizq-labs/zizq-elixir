@@ -49,18 +49,6 @@ defmodule Zizq.Integration.BatchTest do
     |> Zizq.enqueue!(:bt)
   end
 
-  defp fetch_job!(url, id) do
-    {:ok, {{_, 200, _}, _headers, body}} =
-      :httpc.request(
-        :get,
-        {~c"#{url}/jobs/#{id}", [{~c"accept", ~c"application/json"}]},
-        [],
-        body_format: :binary
-      )
-
-    JSON.decode!(body)
-  end
-
   test "a second enqueue for the same tenant folds into the first", ctx do
     first = enqueue!(ctx, [%{"a" => 1}])
     second = enqueue!(ctx, [%{"a" => 2}])
@@ -76,10 +64,10 @@ defmodule Zizq.Integration.BatchTest do
     first = enqueue!(ctx, [%{"a" => 1}])
     enqueue!(ctx, [%{"a" => 2}])
 
-    stored = fetch_job!(ctx.url, first.id)
+    stored = Zizq.get_job!(first.id, :bt)
 
-    assert stored["payload"]["events"] == [%{"a" => 1}, %{"a" => 2}]
-    assert stored["payload"]["tenant_id"] == ctx.tenant
+    assert stored.payload["events"] == [%{"a" => 1}, %{"a" => 2}]
+    assert stored.payload["tenant_id"] == ctx.tenant
   end
 
   test "a different tenant gets its own batch", ctx do

@@ -65,18 +65,6 @@ defmodule Zizq.Integration.RouterTest do
     )
   end
 
-  defp fetch_job!(url, id) do
-    {:ok, {{_, 200, _}, _headers, body}} =
-      :httpc.request(
-        :get,
-        {~c"#{url}/jobs/#{id}", [{~c"accept", ~c"application/json"}]},
-        [],
-        body_format: :binary
-      )
-
-    JSON.decode!(body)
-  end
-
   defp eventually(condition, timeout \\ 10_000) do
     deadline = System.monotonic_time(:millisecond) + timeout
     poll(condition, deadline)
@@ -146,7 +134,7 @@ defmodule Zizq.Integration.RouterTest do
 
     start_worker!(ctx, Zizq.Router.new([Echo]))
 
-    eventually(fn -> fetch_job!(ctx.url, job.id)["attempts"] == 1 end)
+    eventually(fn -> Zizq.get_job!(job.id, :rt).attempts == 1 end)
 
     {:ok, {{_, 200, _}, _, body}} =
       :httpc.request(

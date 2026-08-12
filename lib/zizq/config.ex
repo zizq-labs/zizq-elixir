@@ -87,6 +87,9 @@ defmodule Zizq.Config do
   defstruct [
     :name,
     :uri,
+    # Set only by `Zizq.Testing`, never from user options: when
+    # present, requests are recorded instead of sent.
+    :recorder,
     :codec,
     :finch_name,
     :pool_count,

@@ -48,7 +48,20 @@ defmodule Zizq.HTTP do
   be encoded or decoded.
   """
   @spec request(Config.t(), atom(), String.t(), term() | nil) :: response()
-  def request(%Config{} = config, method, path, body \\ nil) do
+  def request(config, method, path, body \\ nil)
+
+  # Diverted here rather than higher up, so everything above this point
+  # — option validation, derived keys, telemetry — runs exactly as it
+  # does against a real server.
+  def request(%Config{recorder: recorder}, :post, path, body) when is_pid(recorder) do
+    Zizq.Testing.record(path, body)
+  end
+
+  def request(%Config{recorder: recorder}, _method, path, _body) when is_pid(recorder) do
+    Zizq.Testing.record(path, nil)
+  end
+
+  def request(%Config{} = config, method, path, body) do
     with {:ok, headers, encoded} <- build_body(config, body) do
       method
       |> Finch.build(endpoint(config, path), headers, encoded)

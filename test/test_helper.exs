@@ -5,4 +5,7 @@
 # something did *not* happen.
 ExUnit.configure(assert_receive_timeout: 2_000)
 
+# Records enqueues made through a client set up by `use Zizq.Testing`.
+{:ok, _} = Zizq.Testing.start_link()
+
 ExUnit.start()

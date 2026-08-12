@@ -149,6 +149,7 @@ defmodule Zizq.Worker do
       |> Keyword.merge(
         acker: acker,
         tasks: tasks,
+        worker: name,
         concurrency: concurrency,
         drain_timeout: drain_timeout,
         prefetch: Keyword.get(opts, :prefetch, concurrency * 2)

@@ -136,18 +136,35 @@ defmodule Zizq do
           {:ok, Zizq.Job.t()} | {:error, Zizq.Error.t()}
   def enqueue(enqueue, name) when is_atom(name) do
     config = Config.fetch!(name)
-    wire = enqueue |> Zizq.Enqueue.new!() |> Zizq.Enqueue.to_wire()
+    # Built before the span: a malformed enqueue is the caller's
+    # mistake, not a failed request, and building it is what supplies
+    # the type and queue the span reports.
+    enqueue = Zizq.Enqueue.new!(enqueue)
+    wire = Zizq.Enqueue.to_wire(enqueue)
+    meta = %{client: name, count: 1, type: enqueue.type, queue: enqueue.queue}
 
-    case Zizq.HTTP.request(config, :post, "/jobs", wire) do
-      # 200 rather than 201 when the job was a duplicate of one already
-      # queued, or folded into an existing batch: nothing was created,
-      # and the existing job comes back with `:duplicate` or `:folded`
-      # set.
-      {:ok, status, job} when status in [200, 201] -> {:ok, Zizq.Job.from_wire(job)}
-      {:ok, status, body} -> {:error, Zizq.Error.from_response(status, body)}
-      {:error, %Zizq.Error{} = error} -> {:error, error}
-    end
+    Zizq.Telemetry.span([:enqueue], meta, fn ->
+      result =
+        case Zizq.HTTP.request(config, :post, "/jobs", wire) do
+          # 200 rather than 201 when the job was a duplicate of one
+          # already queued, or folded into an existing batch: nothing
+          # was created, and the existing job comes back with
+          # `:duplicate` or `:folded` set.
+          {:ok, status, job} when status in [200, 201] -> {:ok, Zizq.Job.from_wire(job)}
+          {:ok, status, body} -> {:error, Zizq.Error.from_response(status, body)}
+          {:error, %Zizq.Error{} = error} -> {:error, error}
+        end
+
+      {result, stop_metadata(meta, result)}
+    end)
   end
+
+  # `:telemetry.span/3` replaces the start metadata rather than merging
+  # into it, so the whole map has to go back, not just the outcome.
+  defp stop_metadata(meta, {:ok, _value}), do: Map.put(meta, :outcome, :ok)
+
+  defp stop_metadata(meta, {:error, error}),
+    do: Map.merge(meta, %{outcome: :error, error: error})
 
   @doc """
   Enqueue a job, raising on failure.
@@ -188,19 +205,29 @@ defmodule Zizq do
     config = Config.fetch!(name)
     wire = %{"jobs" => Enum.map(Enum.with_index(enqueues), &to_wire_at/1)}
 
-    case Zizq.HTTP.request(config, :post, "/jobs/bulk", wire) do
-      # 200 rather than 201 when every job was a duplicate or folded
-      # into an existing batch, so nothing new was created. Both are
-      # success.
-      {:ok, status, %{"jobs" => jobs}} when status in [200, 201] ->
-        {:ok, Enum.map(jobs, &Zizq.Job.from_wire/1)}
+    # One span for the request, not one per job. `:type` and `:queue`
+    # are carried as `nil` rather than omitted, so a handler tagging
+    # metrics by them sees the same key set as a single enqueue.
+    meta = %{client: name, count: length(enqueues), type: nil, queue: nil}
 
-      {:ok, status, body} ->
-        {:error, Zizq.Error.from_response(status, body)}
+    Zizq.Telemetry.span([:enqueue], meta, fn ->
+      result =
+        case Zizq.HTTP.request(config, :post, "/jobs/bulk", wire) do
+          # 200 rather than 201 when every job was a duplicate or
+          # folded into an existing batch, so nothing new was created.
+          # Both are success.
+          {:ok, status, %{"jobs" => jobs}} when status in [200, 201] ->
+            {:ok, Enum.map(jobs, &Zizq.Job.from_wire/1)}
 
-      {:error, %Zizq.Error{} = error} ->
-        {:error, error}
-    end
+          {:ok, status, body} ->
+            {:error, Zizq.Error.from_response(status, body)}
+
+          {:error, %Zizq.Error{} = error} ->
+            {:error, error}
+        end
+
+      {result, stop_metadata(meta, result)}
+    end)
   end
 
   @doc """

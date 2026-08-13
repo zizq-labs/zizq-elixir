@@ -701,6 +701,146 @@ defmodule Zizq do
   end
 
   @doc """
+  Change every job matching a set of filters, and return how many.
+
+      Zizq.update_all_jobs(
+        [where: [queue: "emails", status: :scheduled], apply: [ready_at: nil]],
+        MyApp.Zizq
+      )
+      #=> {:ok, 42}
+
+  ## Options
+
+    * `:where` — which jobs to change, using the filters in
+      `Zizq.Filter`. Restricts the operation the way a `WHERE` clause
+      does, and is optional for the same reason: left out, every job
+      is changed, deliberately.
+    * `:apply` — what to change, using the options `update_job/3`
+      takes, with the same merge-patch rules. An omitted option leaves
+      a field alone, `nil` clears it. Required.
+
+  Named rather than positional because both halves are keyword lists
+  of overlapping keys — `queue:` and `priority:` mean something on
+  each side — so transposing them could quietly change the wrong jobs
+  rather than fail.
+
+  Finished jobs cannot be changed, so asking for one is an error
+  rather than a silent no-op: `status: :completed` or `status: :dead`
+  in `:where` is rejected before the request is sent.
+  """
+  @spec update_all_jobs(keyword(), atom()) ::
+          {:ok, non_neg_integer()} | {:error, Zizq.Error.t()}
+  def update_all_jobs(opts, name) when is_atom(name) do
+    config = Config.fetch!(name)
+    {where, changes} = split_bulk_opts!(opts)
+
+    reject_terminal_statuses!(where, "change")
+    wire = patch_body(changes)
+    params = URI.encode_query(Zizq.Filter.to_params(where))
+
+    case Zizq.HTTP.request(config, :patch, "/jobs?" <> params, wire) do
+      {:ok, 200, %{"patched" => count}} -> {:ok, count}
+      {:ok, status, body} -> {:error, Zizq.Error.from_response(status, body)}
+      {:error, %Zizq.Error{} = error} -> {:error, error}
+    end
+  end
+
+  @doc """
+  Change every matching job, raising on failure.
+  """
+  @spec update_all_jobs!(keyword(), atom()) :: non_neg_integer()
+  def update_all_jobs!(opts, name) do
+    case update_all_jobs(opts, name) do
+      {:ok, count} -> count
+      {:error, error} -> raise error
+    end
+  end
+
+  defp split_bulk_opts!(opts) do
+    case Keyword.keys(opts) -- [:where, :apply] do
+      [] ->
+        :ok
+
+      unknown ->
+        raise ArgumentError,
+              "update_all_jobs/2 takes :where and :apply, got #{inspect(unknown)}. " <>
+                "Filters go in :where, changes in :apply."
+    end
+
+    unless Keyword.has_key?(opts, :apply) do
+      raise ArgumentError,
+            "update_all_jobs/2 needs :apply — the fields to change. " <>
+              "Pass :where to narrow which jobs are changed."
+    end
+
+    {Keyword.get(opts, :where, []), Keyword.fetch!(opts, :apply)}
+  end
+
+  @doc """
+  Delete every job matching a set of filters, and return how many.
+
+      Zizq.delete_all_jobs([queue: "emails", status: :dead], MyApp.Zizq)
+      #=> {:ok, 17}
+
+  Selection uses the filters in `Zizq.Filter`.
+
+  Filters restrict what is deleted the way a `WHERE` clause does, and
+  are optional for the same reason: `delete_all_jobs([], client)`
+  empties the server, deliberately.
+
+  Counting first with the same filters is a cheap way to see what
+  would go:
+
+      filters = [queue: "emails", status: :dead]
+      {:ok, 17} = Zizq.count_jobs(filters, MyApp.Zizq)
+      {:ok, 17} = Zizq.delete_all_jobs(filters, MyApp.Zizq)
+  """
+  @spec delete_all_jobs(keyword(), atom()) ::
+          {:ok, non_neg_integer()} | {:error, Zizq.Error.t()}
+  def delete_all_jobs(filters \\ [], name) when is_atom(name) do
+    config = Config.fetch!(name)
+    params = URI.encode_query(Zizq.Filter.to_params(filters))
+
+    case Zizq.HTTP.request(config, :delete, "/jobs?" <> params) do
+      {:ok, 200, %{"deleted" => count}} -> {:ok, count}
+      {:ok, status, body} -> {:error, Zizq.Error.from_response(status, body)}
+      {:error, %Zizq.Error{} = error} -> {:error, error}
+    end
+  end
+
+  @doc """
+  Delete every matching job, raising on failure.
+  """
+  @spec delete_all_jobs!(keyword(), atom()) :: non_neg_integer()
+  def delete_all_jobs!(filters \\ [], name) do
+    case delete_all_jobs(filters, name) do
+      {:ok, count} -> count
+      {:error, error} -> raise error
+    end
+  end
+
+  @terminal_statuses [:completed, :dead]
+
+  # Pre-empted rather than left to the server's 422, which costs a
+  # round trip to learn something knowable here — and reads as a
+  # server complaint about a mistake made at the call site.
+  defp reject_terminal_statuses!(filters, verb) do
+    filters
+    |> Keyword.get(:status)
+    |> List.wrap()
+    |> Enum.filter(&(&1 in @terminal_statuses))
+    |> case do
+      [] ->
+        :ok
+
+      [status | _] ->
+        raise ArgumentError,
+              "cannot #{verb} jobs with status #{inspect(status)} — a finished job is " <>
+                "not editable. Filter by a status that can still run, or delete them."
+    end
+  end
+
+  @doc """
   Delete a job outright.
 
       Zizq.delete_job(job, MyApp.Zizq)

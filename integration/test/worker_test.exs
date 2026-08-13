@@ -128,18 +128,11 @@ defmodule Zizq.Integration.WorkerTest do
 
     eventually(fn -> Zizq.get_job!(job.id, :wk).attempts == 1 end)
 
-    {:ok, {{_, 200, _}, _, body}} =
-      :httpc.request(
-        :get,
-        {~c"#{ctx.url}/jobs/#{job.id}/errors", [{~c"accept", ~c"application/json"}]},
-        [],
-        body_format: :binary
-      )
-
-    assert [error | _] = JSON.decode!(body)["errors"]
-    assert error["message"] == "handler blew up"
-    assert error["error_type"] == "ArgumentError"
-    assert error["backtrace"] =~ "worker_test.exs"
+    assert %Zizq.ErrorPage{errors: [error | _]} = Zizq.list_errors!(job, :wk)
+    assert error.attempt == 1
+    assert error.message == "handler blew up"
+    assert error.error_type == "ArgumentError"
+    assert error.backtrace =~ "worker_test.exs"
   end
 
   test "{:cancel, reason} kills the job outright", ctx do

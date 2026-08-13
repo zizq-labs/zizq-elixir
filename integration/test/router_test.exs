@@ -136,17 +136,9 @@ defmodule Zizq.Integration.RouterTest do
 
     eventually(fn -> Zizq.get_job!(job.id, :rt).attempts == 1 end)
 
-    {:ok, {{_, 200, _}, _, body}} =
-      :httpc.request(
-        :get,
-        {~c"#{ctx.url}/jobs/#{job.id}/errors", [{~c"accept", ~c"application/json"}]},
-        [],
-        body_format: :binary
-      )
-
-    assert [error | _] = JSON.decode!(body)["errors"]
-    assert error["error_type"] == "Zizq.Router.UnknownJobType"
-    assert error["message"] =~ ~s(no handler registered for job type "router_unrouted")
+    assert %Zizq.ErrorPage{errors: [error | _]} = Zizq.list_errors!(job, :rt)
+    assert error.error_type == "Zizq.Router.UnknownJobType"
+    assert error.message =~ ~s(no handler registered for job type "router_unrouted")
   end
 
   test "a fallback handles the unrouted type instead of failing it", ctx do

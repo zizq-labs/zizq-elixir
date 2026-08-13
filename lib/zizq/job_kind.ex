@@ -64,7 +64,9 @@ defmodule Zizq.JobKind do
 
   `:attempts` counts attempts that have already finished, so it is `0`
   while a job runs for the first time and the guard above first matches
-  on the fourth run.
+  on the fourth run. Note that `Zizq.ErrorRecord`'s `:attempt` numbers
+  the attempt a failure belongs to, so it reads one higher than the
+  `:attempts` a handler saw during that same run.
 
   Defining both is fine — `perform/2` wins. Defining neither fails at
   compile time. The choice is resolved while the module compiles, so

@@ -542,6 +542,165 @@ defmodule Zizq do
   defp patch_value(_key, value), do: value
 
   @doc """
+  List jobs, oldest first, one page at a time.
+
+  Narrow with any of the filters in `Zizq.Filter`:
+
+      Zizq.list_jobs([queue: "emails", status: [:ready]], MyApp.Zizq)
+      #=> {:ok, %Zizq.JobPage{jobs: [%Zizq.Job{}, ...]}}
+
+  ## Options
+
+  Every option `Zizq.Filter` documents, plus:
+
+    * `:limit` — jobs per page, 1 to 2000. The server decides if
+      unset.
+    * `:order` — `:asc` (oldest first) or `:desc` (newest first).
+      The server defaults to `:asc`.
+
+  Follow the pages with `next_page/2` and `prev_page/2`.
+  """
+  @spec list_jobs(keyword(), atom()) :: {:ok, Zizq.JobPage.t()} | {:error, Zizq.Error.t()}
+  def list_jobs(opts \\ [], name) when is_atom(name) do
+    {page_opts, filters} = Keyword.split(opts, [:limit, :order])
+    params = Zizq.Filter.to_params(filters) ++ page_params(page_opts)
+
+    get_page(name, "/jobs?" <> URI.encode_query(params), Zizq.JobPage)
+  end
+
+  @doc """
+  List jobs, raising on failure.
+  """
+  @spec list_jobs!(keyword(), atom()) :: Zizq.JobPage.t()
+  def list_jobs!(opts \\ [], name) do
+    case list_jobs(opts, name) do
+      {:ok, page} -> page
+      {:error, error} -> raise error
+    end
+  end
+
+  @doc """
+  Fetch the page after this one, or `nil` at the end of the listing.
+
+      {:ok, page} = Zizq.list_jobs([queue: "emails"], MyApp.Zizq)
+      {:ok, next} = Zizq.next_page(page, MyApp.Zizq)
+
+  The link carries the cursor and the original filters.
+  """
+  @spec next_page(Zizq.JobPage.t(), atom()) ::
+          {:ok, Zizq.JobPage.t() | nil} | {:error, Zizq.Error.t()}
+  def next_page(%Zizq.JobPage{next: nil}, name) when is_atom(name), do: {:ok, nil}
+
+  def next_page(%Zizq.JobPage{next: next}, name) when is_atom(name),
+    do: get_page(name, next, Zizq.JobPage)
+
+  @doc """
+  Fetch the page before this one, or `nil` at the start of the listing.
+
+      {:ok, prev} = Zizq.prev_page(page, MyApp.Zizq)
+  """
+  @spec prev_page(Zizq.JobPage.t(), atom()) ::
+          {:ok, Zizq.JobPage.t() | nil} | {:error, Zizq.Error.t()}
+  def prev_page(%Zizq.JobPage{prev: nil}, name) when is_atom(name), do: {:ok, nil}
+
+  def prev_page(%Zizq.JobPage{prev: prev}, name) when is_atom(name),
+    do: get_page(name, prev, Zizq.JobPage)
+
+  # Takes the page module rather than assuming jobs: error listings
+  # paginate through the identical `{items, pages}` shape, so they
+  # differ only in how a page decodes. `next_page/2` and `prev_page/2`
+  # gain a clause each when those land, not a second implementation.
+  defp get_page(name, path, page_module) do
+    config = Config.fetch!(name)
+
+    case Zizq.HTTP.request(config, :get, path) do
+      {:ok, 200, body} -> {:ok, page_module.from_wire(body)}
+      {:ok, status, body} -> {:error, Zizq.Error.from_response(status, body)}
+      {:error, %Zizq.Error{} = error} -> {:error, error}
+    end
+  end
+
+  defp page_params(opts) do
+    opts
+    |> Enum.map(fn
+      {:limit, limit} when is_integer(limit) and limit > 0 ->
+        {:limit, limit}
+
+      {:limit, other} ->
+        raise ArgumentError, "list :limit must be a positive integer, got #{inspect(other)}"
+
+      {:order, order} when order in [:asc, :desc] ->
+        {:order, Atom.to_string(order)}
+
+      {:order, other} ->
+        raise ArgumentError, "list :order must be :asc or :desc, got #{inspect(other)}"
+    end)
+  end
+
+  @doc """
+  Count the jobs matching a set of filters.
+
+      Zizq.count_jobs([queue: "emails", status: [:ready]], MyApp.Zizq)
+      #=> {:ok, 1_284}
+
+  Counting is a separate endpoint rather than the length of a listing,
+  so a count costs one request whatever the total.
+  """
+  @spec count_jobs(keyword(), atom()) :: {:ok, non_neg_integer()} | {:error, Zizq.Error.t()}
+  def count_jobs(filters \\ [], name) when is_atom(name) do
+    config = Config.fetch!(name)
+    params = URI.encode_query(Zizq.Filter.to_params(filters))
+
+    case Zizq.HTTP.request(config, :get, "/jobs/count?" <> params) do
+      {:ok, 200, %{"count" => count}} -> {:ok, count}
+      {:ok, status, body} -> {:error, Zizq.Error.from_response(status, body)}
+      {:error, %Zizq.Error{} = error} -> {:error, error}
+    end
+  end
+
+  @doc """
+  Count jobs, raising on failure.
+  """
+  @spec count_jobs!(keyword(), atom()) :: non_neg_integer()
+  def count_jobs!(filters \\ [], name) do
+    case count_jobs(filters, name) do
+      {:ok, count} -> count
+      {:error, error} -> raise error
+    end
+  end
+
+  @doc """
+  List the queues the server currently holds jobs for.
+
+      Zizq.list_queues(MyApp.Zizq)
+      #=> {:ok, ["default", "emails"]}
+
+  Queues are not declared — one exists because a job named it — so
+  this reports what is there rather than what was configured.
+  """
+  @spec list_queues(atom()) :: {:ok, [String.t()]} | {:error, Zizq.Error.t()}
+  def list_queues(name) when is_atom(name) do
+    config = Config.fetch!(name)
+
+    case Zizq.HTTP.request(config, :get, "/queues") do
+      {:ok, 200, %{"queues" => queues}} -> {:ok, queues}
+      {:ok, status, body} -> {:error, Zizq.Error.from_response(status, body)}
+      {:error, %Zizq.Error{} = error} -> {:error, error}
+    end
+  end
+
+  @doc """
+  List queues, raising on failure.
+  """
+  @spec list_queues!(atom()) :: [String.t()]
+  def list_queues!(name) do
+    case list_queues(name) do
+      {:ok, queues} -> queues
+      {:error, error} -> raise error
+    end
+  end
+
+  @doc """
   Delete a job outright.
 
       Zizq.delete_job(job, MyApp.Zizq)

@@ -587,24 +587,34 @@ defmodule Zizq do
 
   The link carries the cursor and the original filters.
   """
-  @spec next_page(Zizq.JobPage.t(), atom()) ::
-          {:ok, Zizq.JobPage.t() | nil} | {:error, Zizq.Error.t()}
+  @spec next_page(page, atom()) :: {:ok, page | nil} | {:error, Zizq.Error.t()}
+        when page: Zizq.JobPage.t() | Zizq.ErrorPage.t()
   def next_page(%Zizq.JobPage{next: nil}, name) when is_atom(name), do: {:ok, nil}
 
   def next_page(%Zizq.JobPage{next: next}, name) when is_atom(name),
     do: get_page(name, next, Zizq.JobPage)
+
+  def next_page(%Zizq.ErrorPage{next: nil}, name) when is_atom(name), do: {:ok, nil}
+
+  def next_page(%Zizq.ErrorPage{next: next}, name) when is_atom(name),
+    do: get_page(name, next, Zizq.ErrorPage)
 
   @doc """
   Fetch the page before this one, or `nil` at the start of the listing.
 
       {:ok, prev} = Zizq.prev_page(page, MyApp.Zizq)
   """
-  @spec prev_page(Zizq.JobPage.t(), atom()) ::
-          {:ok, Zizq.JobPage.t() | nil} | {:error, Zizq.Error.t()}
+  @spec prev_page(page, atom()) :: {:ok, page | nil} | {:error, Zizq.Error.t()}
+        when page: Zizq.JobPage.t() | Zizq.ErrorPage.t()
   def prev_page(%Zizq.JobPage{prev: nil}, name) when is_atom(name), do: {:ok, nil}
 
   def prev_page(%Zizq.JobPage{prev: prev}, name) when is_atom(name),
     do: get_page(name, prev, Zizq.JobPage)
+
+  def prev_page(%Zizq.ErrorPage{prev: nil}, name) when is_atom(name), do: {:ok, nil}
+
+  def prev_page(%Zizq.ErrorPage{prev: prev}, name) when is_atom(name),
+    do: get_page(name, prev, Zizq.ErrorPage)
 
   # Takes the page module rather than assuming jobs: error listings
   # paginate through the identical `{items, pages}` shape, so they
@@ -837,6 +847,75 @@ defmodule Zizq do
         raise ArgumentError,
               "cannot #{verb} jobs with status #{inspect(status)} — a finished job is " <>
                 "not editable. Filter by a status that can still run, or delete them."
+    end
+  end
+
+  @doc """
+  List a job's failed attempts, oldest first.
+
+      Zizq.list_errors(job, MyApp.Zizq)
+      #=> {:ok, %Zizq.ErrorPage{errors: [%Zizq.ErrorRecord{attempt: 1}, ...]}}
+
+  ## Options
+
+    * `:limit` — records per page, 1 to 200. The server decides if
+      unset.
+    * `:order` — `:asc` (first attempt first) or `:desc` (most recent
+      first). The server defaults to `:asc`.
+
+  Pages follow with `next_page/2`, the same as a job listing.
+
+  Errors live as long as the job does, so a completed job whose
+  retention has expired takes its failure history with it.
+  """
+  @spec list_errors(Zizq.Job.t() | String.t(), atom(), keyword()) ::
+          {:ok, Zizq.ErrorPage.t()} | {:error, Zizq.Error.t()}
+  def list_errors(job, name, opts \\ []) when is_atom(name) do
+    params = URI.encode_query(page_params(opts))
+
+    get_page(name, "/jobs/#{job_id(job)}/errors?" <> params, Zizq.ErrorPage)
+  end
+
+  @doc """
+  List a job's failed attempts, raising on failure.
+  """
+  @spec list_errors!(Zizq.Job.t() | String.t(), atom(), keyword()) :: Zizq.ErrorPage.t()
+  def list_errors!(job, name, opts \\ []) do
+    case list_errors(job, name, opts) do
+      {:ok, page} -> page
+      {:error, error} -> raise error
+    end
+  end
+
+  @doc """
+  Read what went wrong on one attempt.
+
+      Zizq.get_error(job, 1, MyApp.Zizq)
+      #=> {:ok, %Zizq.ErrorRecord{attempt: 1, message: "SMTP timeout"}}
+
+  Attempts count from 1. An attempt that never failed — or never
+  happened — is `{:error, %Zizq.Error{reason: :not_found}}`.
+  """
+  @spec get_error(Zizq.Job.t() | String.t(), pos_integer(), atom()) ::
+          {:ok, Zizq.ErrorRecord.t()} | {:error, Zizq.Error.t()}
+  def get_error(job, attempt, name) when is_integer(attempt) and is_atom(name) do
+    config = Config.fetch!(name)
+
+    case Zizq.HTTP.request(config, :get, "/jobs/#{job_id(job)}/errors/#{attempt}") do
+      {:ok, 200, body} -> {:ok, Zizq.ErrorRecord.from_wire(body)}
+      {:ok, status, body} -> {:error, Zizq.Error.from_response(status, body)}
+      {:error, %Zizq.Error{} = error} -> {:error, error}
+    end
+  end
+
+  @doc """
+  Read one attempt's error, raising on failure.
+  """
+  @spec get_error!(Zizq.Job.t() | String.t(), pos_integer(), atom()) :: Zizq.ErrorRecord.t()
+  def get_error!(job, attempt, name) do
+    case get_error(job, attempt, name) do
+      {:ok, record} -> record
+      {:error, error} -> raise error
     end
   end
 

@@ -1202,6 +1202,45 @@ defmodule Zizq do
   defp segment(value), do: URI.encode(value, &URI.char_unreserved?/1)
 
   @doc """
+  Delete every job and every cron schedule on the server.
+
+      Zizq.erase_all_data(MyApp.Zizq)
+      #=> :ok
+
+  > #### This empties the server {: .warning}
+  >
+  > Not a filtered delete — there is nothing to narrow and nothing to
+  > confirm. Every job in every queue and every schedule goes, and the
+  > call simply returns once they have.
+
+  Intended as a setup or teardown step in tests and development, where
+  a known-empty server between scenarios is worth more than the data.
+  It is one request rather than `delete_all_jobs/2` followed by
+  `delete_all_crons/1`.
+  """
+  @spec erase_all_data(atom()) :: :ok | {:error, Zizq.Error.t()}
+  def erase_all_data(name) when is_atom(name) do
+    config = Config.fetch!(name)
+
+    case Zizq.HTTP.request(config, :post, "/reset", %{}) do
+      {:ok, 204, _body} -> :ok
+      {:ok, status, body} -> {:error, Zizq.Error.from_response(status, body)}
+      {:error, %Zizq.Error{} = error} -> {:error, error}
+    end
+  end
+
+  @doc """
+  Delete every job and schedule, raising on failure.
+  """
+  @spec erase_all_data!(atom()) :: :ok
+  def erase_all_data!(name) do
+    case erase_all_data(name) do
+      :ok -> :ok
+      {:error, error} -> raise error
+    end
+  end
+
+  @doc """
   Delete a job outright.
 
       Zizq.delete_job(job, MyApp.Zizq)

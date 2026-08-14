@@ -920,6 +920,288 @@ defmodule Zizq do
   end
 
   @doc """
+  Install a cron schedule, replacing whatever was there.
+
+  This is the call to make at application startup:
+
+      Zizq.Cron.new("my_app",
+        entries: [
+          [name: "nightly_cleanup",
+           expression: "0 3 * * *",
+           job: MyApp.Cleanup.new(%{})],
+          [name: "digest",
+           expression: "*/15 * * * *",
+           timezone: "Australia/Melbourne",
+           job: [type: "digest", queue: "reports"]]
+        ]
+      )
+      |> Zizq.replace_cron(MyApp.Zizq)
+
+  Or alternatively pipelined:
+
+      Zizq.Cron.new("my_app")
+      |> Zizq.Cron.put_entry(
+        name: "nightly_cleanup",
+        expression: "0 3 * * *",
+        job: MyApp.Cleanup.new(%{})
+      )
+      |> Zizq.Cron.put_entry(
+        name: "digest",
+        expression: "*/15 * * * *",
+        timezone: "Australia/Melbourne",
+        job: [type: "digest", queue: "reports"]
+      )
+      |> Zizq.replace_cron(MyApp.Zizq)
+
+  It is atomic and idempotent, so every instance of an application can
+  run it on boot without coordinating — none of them needs to be the
+  one that owns the schedule.
+
+  The group is created if it does not exist, and **entries left out
+  are removed**, so a `Zizq.Cron` is the whole schedule rather than an
+  addition to it. That is what makes running it on every boot converge
+  rather than accumulate.
+
+  Once configured, there is no futher integration required. Your
+  `Zizq.Worker` process receives jobs enqueued via the schedule just
+  like any other job.
+
+  Cron needs a Pro licence; without one the server answers 403, which
+  arrives as `%Zizq.Error{reason: :forbidden}`.
+  """
+  @spec replace_cron(Zizq.Cron.t(), atom()) :: {:ok, Zizq.Cron.t()} | {:error, Zizq.Error.t()}
+  def replace_cron(%Zizq.Cron{} = cron, name) when is_atom(name) do
+    config = Config.fetch!(name)
+
+    unless is_binary(cron.name) and cron.name != "" do
+      raise ArgumentError,
+            "this schedule has no name, so there is nothing to install it as. " <>
+              "Build it with Zizq.Cron.new/2."
+    end
+
+    case Zizq.HTTP.request(config, :put, cron_path(cron), Zizq.Cron.to_wire(cron)) do
+      {:ok, status, body} when status in [200, 201] -> {:ok, Zizq.Cron.from_wire(body)}
+      {:ok, status, body} -> {:error, Zizq.Error.from_response(status, body)}
+      {:error, %Zizq.Error{} = error} -> {:error, error}
+    end
+  end
+
+  @doc """
+  Install a cron schedule, raising on failure.
+  """
+  @spec replace_cron!(Zizq.Cron.t(), atom()) :: Zizq.Cron.t()
+  def replace_cron!(cron, name) do
+    case replace_cron(cron, name) do
+      {:ok, group} -> group
+      {:error, error} -> raise error
+    end
+  end
+
+  @doc """
+  Read a cron schedule and its entries.
+  """
+  @spec get_cron(Zizq.Cron.t() | String.t(), atom()) ::
+          {:ok, Zizq.Cron.t()} | {:error, Zizq.Error.t()}
+  def get_cron(cron, name) when is_atom(name) do
+    config = Config.fetch!(name)
+
+    case Zizq.HTTP.request(config, :get, cron_path(cron)) do
+      {:ok, 200, body} -> {:ok, Zizq.Cron.from_wire(body)}
+      {:ok, status, body} -> {:error, Zizq.Error.from_response(status, body)}
+      {:error, %Zizq.Error{} = error} -> {:error, error}
+    end
+  end
+
+  @doc """
+  Read a cron schedule, raising on failure.
+  """
+  @spec get_cron!(Zizq.Cron.t() | String.t(), atom()) :: Zizq.Cron.t()
+  def get_cron!(cron, name) do
+    case get_cron(cron, name) do
+      {:ok, group} -> group
+      {:error, error} -> raise error
+    end
+  end
+
+  @doc """
+  List the names of every cron schedule on the server.
+  """
+  @spec list_crons(atom()) :: {:ok, [String.t()]} | {:error, Zizq.Error.t()}
+  def list_crons(name) when is_atom(name) do
+    config = Config.fetch!(name)
+
+    case Zizq.HTTP.request(config, :get, "/crons") do
+      {:ok, 200, %{"crons" => crons}} -> {:ok, crons}
+      {:ok, status, body} -> {:error, Zizq.Error.from_response(status, body)}
+      {:error, %Zizq.Error{} = error} -> {:error, error}
+    end
+  end
+
+  @doc """
+  List cron schedule names, raising on failure.
+  """
+  @spec list_crons!(atom()) :: [String.t()]
+  def list_crons!(name) do
+    case list_crons(name) do
+      {:ok, crons} -> crons
+      {:error, error} -> raise error
+    end
+  end
+
+  @doc """
+  Delete a cron schedule and everything all its entries.
+
+  Jobs it already enqueued are unaffected.
+  """
+  @spec delete_cron(Zizq.Cron.t() | String.t(), atom()) :: :ok | {:error, Zizq.Error.t()}
+  def delete_cron(cron, name) when is_atom(name) do
+    config = Config.fetch!(name)
+
+    case Zizq.HTTP.request(config, :delete, cron_path(cron)) do
+      {:ok, 204, _body} -> :ok
+      {:ok, status, body} -> {:error, Zizq.Error.from_response(status, body)}
+      {:error, %Zizq.Error{} = error} -> {:error, error}
+    end
+  end
+
+  @doc """
+  Delete a cron schedule, raising on failure.
+  """
+  @spec delete_cron!(Zizq.Cron.t() | String.t(), atom()) :: :ok
+  def delete_cron!(cron, name) do
+    case delete_cron(cron, name) do
+      :ok -> :ok
+      {:error, error} -> raise error
+    end
+  end
+
+  @doc """
+  Delete every cron schedule, and return how many were removed.
+  """
+  @spec delete_all_crons(atom()) :: {:ok, non_neg_integer()} | {:error, Zizq.Error.t()}
+  def delete_all_crons(name) when is_atom(name) do
+    config = Config.fetch!(name)
+
+    case Zizq.HTTP.request(config, :delete, "/crons") do
+      {:ok, 200, %{"deleted" => count}} -> {:ok, count}
+      {:ok, status, body} -> {:error, Zizq.Error.from_response(status, body)}
+      {:error, %Zizq.Error{} = error} -> {:error, error}
+    end
+  end
+
+  @doc """
+  Suspend a whole cron schedule. Its entries stop firing until resumed.
+  """
+  @spec pause_cron(Zizq.Cron.t() | String.t(), atom()) ::
+          {:ok, Zizq.Cron.t()} | {:error, Zizq.Error.t()}
+  def pause_cron(cron, name), do: set_cron_paused(cron, name, true)
+
+  @doc """
+  Resume a suspended cron schedule.
+  """
+  @spec resume_cron(Zizq.Cron.t() | String.t(), atom()) ::
+          {:ok, Zizq.Cron.t()} | {:error, Zizq.Error.t()}
+  def resume_cron(cron, name), do: set_cron_paused(cron, name, false)
+
+  defp set_cron_paused(cron, name, paused) when is_atom(name) do
+    config = Config.fetch!(name)
+
+    case Zizq.HTTP.request(config, :patch, cron_path(cron), %{"paused" => paused}) do
+      {:ok, 200, body} -> {:ok, Zizq.Cron.from_wire(body)}
+      {:ok, status, body} -> {:error, Zizq.Error.from_response(status, body)}
+      {:error, %Zizq.Error{} = error} -> {:error, error}
+    end
+  end
+
+  @doc """
+  Suspend one cron entry, leaving the rest of its schedule running.
+
+      Zizq.pause_cron_entry([cron: "my_app", entry: "digest"], MyApp.Zizq)
+
+  Changes only that entry, on the server, so it is safe while an
+  application is running, unlike reading a schedule, amending it and
+  replacing it, which is last-write-wins.
+
+  Named rather than positional for clarity.
+  """
+  @spec pause_cron_entry(keyword(), atom()) ::
+          {:ok, Zizq.CronEntry.t()} | {:error, Zizq.Error.t()}
+  def pause_cron_entry(opts, name), do: set_cron_entry_paused(opts, name, true)
+
+  @doc """
+  Resume one suspended cron entry.
+  """
+  @spec resume_cron_entry(keyword(), atom()) ::
+          {:ok, Zizq.CronEntry.t()} | {:error, Zizq.Error.t()}
+  def resume_cron_entry(opts, name), do: set_cron_entry_paused(opts, name, false)
+
+  defp set_cron_entry_paused(opts, name, paused) when is_atom(name) do
+    config = Config.fetch!(name)
+    path = cron_entry_path!(opts)
+
+    case Zizq.HTTP.request(config, :patch, path, %{"paused" => paused}) do
+      {:ok, 200, body} -> {:ok, Zizq.CronEntry.from_wire(body)}
+      {:ok, status, body} -> {:error, Zizq.Error.from_response(status, body)}
+      {:error, %Zizq.Error{} = error} -> {:error, error}
+    end
+  end
+
+  @doc """
+  Delete one cron entry, leaving the rest of its schedule alone.
+
+      Zizq.delete_cron_entry([cron: "my_app", entry: "digest"], MyApp.Zizq)
+
+  The server-side counterpart to `Zizq.Cron.delete_entry/2`, which
+  changes a schedule in memory you then replace whole on the server.
+  """
+  @spec delete_cron_entry(keyword(), atom()) :: :ok | {:error, Zizq.Error.t()}
+  def delete_cron_entry(opts, name) when is_atom(name) do
+    config = Config.fetch!(name)
+    path = cron_entry_path!(opts)
+
+    case Zizq.HTTP.request(config, :delete, path) do
+      {:ok, 204, _body} -> :ok
+      {:ok, status, body} -> {:error, Zizq.Error.from_response(status, body)}
+      {:error, %Zizq.Error{} = error} -> {:error, error}
+    end
+  end
+
+  @doc """
+  Delete one cron entry, raising on failure.
+  """
+  @spec delete_cron_entry!(keyword(), atom()) :: :ok
+  def delete_cron_entry!(opts, name) do
+    case delete_cron_entry(opts, name) do
+      :ok -> :ok
+      {:error, error} -> raise error
+    end
+  end
+
+  defp cron_entry_path!(opts) do
+    case Keyword.keys(opts) -- [:cron, :entry] do
+      [] -> :ok
+      unknown -> raise ArgumentError, "takes :cron and :entry, got #{inspect(unknown)}"
+    end
+
+    for key <- [:cron, :entry] do
+      unless is_binary(Keyword.get(opts, key)) do
+        raise ArgumentError, ":#{key} is required, and must be a name"
+      end
+    end
+
+    "/crons/#{segment(opts[:cron])}/entries/#{segment(opts[:entry])}"
+  end
+
+  defp cron_path(%Zizq.Cron{name: name}), do: cron_path(name)
+
+  defp cron_path(name) when is_binary(name), do: "/crons/#{segment(name)}"
+
+  # `URI.encode/1` leaves `/` and `?` alone, which is right for a whole
+  # URI and wrong for one segment of one. A cron or entry name is a
+  # single segment, and the server permits names holding both.
+  defp segment(value), do: URI.encode(value, &URI.char_unreserved?/1)
+
+  @doc """
   Delete a job outright.
 
       Zizq.delete_job(job, MyApp.Zizq)

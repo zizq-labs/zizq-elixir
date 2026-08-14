@@ -648,6 +648,19 @@ defmodule Zizq do
   end
 
   @doc """
+  Start a composable query.
+
+      Zizq.query(MyApp.Zizq)
+      |> Zizq.Query.where(queue: "emails", status: [:ready])
+      |> Enum.take(10)
+
+  Builds nothing and sends nothing until the query is run. See
+  `Zizq.Query`.
+  """
+  @spec query(atom()) :: Zizq.Query.t()
+  def query(name) when is_atom(name), do: Zizq.Query.new(name)
+
+  @doc """
   Count the jobs matching a set of filters.
 
       Zizq.count_jobs([queue: "emails", status: [:ready]], MyApp.Zizq)

@@ -1,5 +1,66 @@
 # Changelog
 
+## 0.6.0-alpha.8
+
+Adds a composable query over the listing endpoints, so paging is
+something the client does rather than something you write.
+
+### Added
+
+- **`Zizq.query/1` and `Zizq.Query`.** A query is enumerable, so
+  `Enum` and `Stream` work on it directly and pages are fetched only
+  as they are needed:
+
+      Zizq.query(MyApp.Zizq)
+      |> Zizq.Query.where(queue: "emails", status: [:ready])
+      |> Enum.take(10)
+
+  That stops after the first page or two, because `Enum.take/2` stops
+  asking. Run to completion, the same query walks every page. Building
+  one sends nothing; a request happens when it is enumerated, counted,
+  or acted on.
+
+  `where/2` takes the filters `Zizq.Filter` already documents and can
+  be called repeatedly, later calls winning per key — one function
+  rather than a `by_queue`, `by_status` and so on for each field,
+  since the filters are already a keyword list. It validates as the
+  query is built, so a typo fails at the line that made it rather than
+  wherever the query is eventually run.
+
+  `order/2` picks the direction, `limit/2` caps the total, and
+  `in_pages_of/2` sets how many are fetched per request — the last two
+  are independent, being *what you want* and *how eagerly it is
+  fetched*.
+
+  `Enum.count/1` asks the server to count rather than walking pages,
+  so it costs one request whatever the total, and agrees with what
+  enumerating the same query yields.
+
+  `pages/1` streams whole `Zizq.JobPage`s for when a page is the
+  useful unit.
+
+- **Acting on everything a query matches.** `Zizq.Query.update_all/2`
+  and `Zizq.Query.delete_all/1` send one request and let the server do
+  the work from the filters:
+
+      Zizq.query(MyApp.Zizq)
+      |> Zizq.Query.where(queue: "emails", status: :scheduled)
+      |> Zizq.Query.update_all(ready_at: nil)
+
+  Give the query a `limit/2` or an `in_pages_of/2` and they work a
+  page at a time instead, acting on each page by id — so ten million
+  jobs become a run of bounded requests rather than one enormous one:
+
+      Zizq.query(MyApp.Zizq)
+      |> Zizq.Query.where(queue: "emails", status: :dead)
+      |> Zizq.Query.in_pages_of(1_000)
+      |> Zizq.Query.delete_all()
+
+  Each page's ids are sent *with* the original filters rather than
+  instead of them, so a job that stopped matching between being listed
+  and being acted on is left alone. The count returned is the total
+  across every batch either way.
+
 ## 0.6.0-alpha.7
 
 Completes the API: jobs can now be read, changed and deleted — one at

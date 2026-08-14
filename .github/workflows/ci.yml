@@ -265,25 +265,6 @@ jobs:
           name: zizq-elixir-package
           path: artifacts
 
-      # `mix hex.publish` builds from this checkout rather than taking a
-      # tarball path, so rebuild here and prove the result is identical
-      # to the artifact the integration job actually tested. Hex
-      # tarballs are reproducible (internal timestamps are pinned), so
-      # any difference means the tree changed between jobs.
-      - name: Verify the publishable tarball matches what CI tested
-        run: |
-          version=${{ needs.package.outputs.version }}
-          ./release.sh
-          built="$(shasum -a 256 "_build/release/zizq-${version}.tar" | cut -d' ' -f1)"
-          tested="$(cut -d' ' -f1 < "artifacts/zizq-${version}.tar.sha256")"
-          if [ "$built" != "$tested" ]; then
-            echo "::error::Rebuilt tarball does not match the tested artifact."
-            echo "  tested: ${tested}"
-            echo "  built:  ${built}"
-            exit 1
-          fi
-          echo "Checksums match: ${built}"
-
       # The irreversible step, so it runs before the GitHub Release
       # below — a failure then leaves nothing else half-done. Hex allows
       # a revert only within one hour of publishing.

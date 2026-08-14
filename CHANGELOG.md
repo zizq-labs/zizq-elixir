@@ -1,5 +1,116 @@
 # Changelog
 
+## 0.6.0-alpha.7
+
+Completes the API: jobs can now be read, changed and deleted — one at
+a time or in bulk — listed and counted, their failure history read,
+and their cron schedules managed.
+
+### Added
+
+- **Reading, changing and deleting one job.** `Zizq.get_job/2`,
+  `Zizq.update_job/3` and `Zizq.delete_job/2`, each taking a
+  `Zizq.Job` or an id:
+
+      Zizq.update_job(job, MyApp.Zizq, queue: "urgent", priority: 0)
+
+  Updates are a merge patch, so the three states are distinct: an
+  option left out leaves that field alone, `nil` clears it to the
+  server's default, and a value sets it.
+
+      # Retry with whatever the server's default limit now is.
+      Zizq.update_job(job, MyApp.Zizq, retry_limit: nil)
+
+  `:queue` and `:priority` have no default to clear to, so `nil` there
+  is rejected with a message saying to omit the option instead.
+  `:retention` merges field by field, so naming `:completed` leaves
+  `:dead` as it was.
+
+- **Listing and counting jobs.** `Zizq.list_jobs/2` returns a
+  `Zizq.JobPage`; follow it with `Zizq.next_page/2` and
+  `Zizq.prev_page/2`. `Zizq.count_jobs/2` counts without listing, and
+  `Zizq.list_queues/1` reports the queues jobs have named.
+
+      Zizq.list_jobs([queue: "emails", status: [:ready]], MyApp.Zizq)
+
+  `Zizq.Filter` documents the filters, which every selecting endpoint
+  shares. Ranges are inclusive and take a number, a `Range`, or
+  `[min: _, max: _]` — Elixir has no open-ended `Range`, so one-sided
+  bounds are given as keywords:
+
+      priority: 5           # exactly 5
+      priority: 1..10       # 1 to 10
+      priority: [min: 5]    # 5 and above
+
+  Pages are followed by the links the server supplies.
+
+- **Changing and deleting jobs in bulk.** `Zizq.update_all_jobs/2` and
+  `Zizq.delete_all_jobs/2`, selecting with the same filters and
+  returning how many were affected:
+
+      Zizq.update_all_jobs(
+        [where: [queue: "emails", status: :scheduled], apply: [ready_at: nil]],
+        MyApp.Zizq
+      )
+
+  The halves are named because both are keyword lists sharing keys —
+  `queue:` and `priority:` mean something on each side — so a
+  transposition could otherwise change the wrong jobs rather than
+  fail. Filters restrict the operation the way a `WHERE` clause does,
+  and are optional for the same reason.
+
+- **Reading why a job failed.** `Zizq.list_errors/3` returns a
+  `Zizq.ErrorPage` of `Zizq.ErrorRecord`s, one per failed attempt, and
+  `Zizq.get_error/3` reads a single attempt.
+
+      Zizq.list_errors(job, MyApp.Zizq)
+
+  Note that a record's `:attempt` numbers the attempt it belongs to,
+  counting from 1, while a `Zizq.Job`'s `:attempts` counts attempts
+  already finished — so a handler on its first run sees `0`, and its
+  failure is recorded as attempt `1`.
+
+- **Cron schedules.** `Zizq.Cron` is both what you build and what the
+  server returns, so installing and amending are the same shape:
+
+      Zizq.Cron.new("my_app",
+        entries: [
+          [name: "nightly_cleanup",
+           expression: "0 3 * * *",
+           job: MyApp.Cleanup.new(%{})]
+        ]
+      )
+      |> Zizq.replace_cron(MyApp.Zizq)
+
+  Installing is atomic and idempotent, so every instance of an
+  application can do it on boot without coordinating. Entries left out
+  are removed, so a `Zizq.Cron` is the whole schedule rather than an
+  addition to it — which is what makes running it on every boot
+  converge rather than accumulate.
+
+  An entry's job is an ordinary `Zizq.Enqueue`, so anything that can
+  be enqueued can be scheduled, including a job built by a
+  `Zizq.JobKind` module.
+
+  Also `Zizq.get_cron/2`, `Zizq.list_crons/1`, `Zizq.delete_cron/2`,
+  `Zizq.delete_all_crons/1`, and `Zizq.pause_cron/2` /
+  `Zizq.resume_cron/2`. A schedule can be amended with
+  `Zizq.Cron.put_entry/2` and `Zizq.Cron.delete_entry/2` and put back,
+  which suits one-off changes; `Zizq.pause_cron_entry/2` and
+  `Zizq.delete_cron_entry/2` change a single entry in one request.
+
+- **`Zizq.erase_all_data/1`.** Deletes every job and every cron
+  schedule in one request, for tests and development that want a
+  known-empty server between scenarios:
+
+      Zizq.erase_all_data(MyApp.Zizq)
+
+### Notes
+
+- Cron, unique keys and batching are Pro-licensed features. Without a
+  licence the server responds 403, which is surfaced as
+  `%Zizq.Error{reason: :forbidden}`.
+
 ## 0.6.0-alpha.6
 
 Adds observability and test support: telemetry events for jobs,

@@ -207,6 +207,27 @@ defmodule Zizq.JobCrudTest do
     end
   end
 
+  describe "erase_all_data/1" do
+    test "posts to the reset endpoint and returns :ok" do
+      name = server(204, nil)
+
+      assert Zizq.erase_all_data(name) == :ok
+      assert_receive {:request, "POST", "/reset", _}
+    end
+
+    test "an error is an error" do
+      name = server(500, ~s({"error":"internal error"}))
+
+      assert {:error, %Zizq.Error{reason: :server_error}} = Zizq.erase_all_data(name)
+    end
+
+    test "the bang variant raises" do
+      name = server(500, ~s({"error":"internal error"}))
+
+      assert_raise Zizq.Error, fn -> Zizq.erase_all_data!(name) end
+    end
+  end
+
   describe "delete_job/2" do
     test "returns :ok on 204" do
       name = server(204, nil)

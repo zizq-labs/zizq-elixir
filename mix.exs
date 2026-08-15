@@ -16,7 +16,34 @@ defmodule Zizq.MixProject do
       package: package(),
       name: "Zizq",
       source_url: @source_url,
-      homepage_url: "https://zizq.io"
+      homepage_url: "https://zizq.io",
+      docs: docs()
+    ]
+  end
+
+  # Grouped so the reference opens on the things a reader starts with —
+  # the client and the two ways to declare work — rather than on an
+  # alphabetical list in which `Zizq.Backoff` comes first.
+  defp docs do
+    [
+      main: "readme",
+      extras: ["README.md", "CHANGELOG.md", "LICENSE"],
+      source_ref: "v#{@version}",
+      groups_for_modules: [
+        Producing: [Zizq.Enqueue, Zizq.JobKind, Zizq.PayloadHasher],
+        Consuming: [Zizq.Worker, Zizq.Router, Zizq.Stream.Take, Zizq.Worker.Acker],
+        Reading: [Zizq.Query, Zizq.Filter, Zizq.JobPage, Zizq.ErrorPage],
+        Scheduling: [Zizq.Cron, Zizq.CronEntry],
+        Resources: [
+          Zizq.Job,
+          Zizq.ErrorRecord,
+          Zizq.Backoff,
+          Zizq.Retention,
+          Zizq.BatchConfig
+        ],
+        "Testing and observability": [Zizq.Testing, Zizq.Telemetry],
+        Internals: [Zizq.Codec, Zizq.Codec.JSON, Zizq.Codec.MessagePack, Zizq.Error]
+      ]
     ]
   end
 
@@ -48,6 +75,10 @@ defmodule Zizq.MixProject do
       # it. Bandit serves HTTP/2 prior-knowledge on a plain `:http`
       # listener, so tests exercise the same transport as production.
       {:bandit, "~> 1.0", only: :test},
+
+      # Docs only; `runtime: false` keeps it out of anything that
+      # depends on this package.
+      {:ex_doc, "~> 0.34", only: :dev, runtime: false},
 
       # Pulled in by Finch, but pinned explicitly: CVE-2026-48862 is
       # unbounded `conn.streams` growth via unenforced PUSH_PROMISE

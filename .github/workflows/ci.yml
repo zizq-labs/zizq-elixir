@@ -269,13 +269,20 @@ jobs:
       # below — a failure then leaves nothing else half-done. Hex allows
       # a revert only within one hour of publishing.
       #
-      # `hex.publish package` publishes the package without docs; docs
-      # need ExDoc, which arrives with the documentation commit. Swap to
-      # plain `hex.publish` then.
+      # Package and docs are published separately, not as one
+      # `mix hex.publish`. Publishing a package is irreversible after
+      # an hour, while docs can be re-uploaded at will — so a docs
+      # failure must not be able to strand a half-published release.
+      # The package goes first for the same reason.
       - name: Publish to Hex
         env:
           HEX_API_KEY: ${{ secrets.HEX_API_KEY }}
         run: mix hex.publish package --yes
+
+      - name: Publish docs to HexDocs
+        env:
+          HEX_API_KEY: ${{ secrets.HEX_API_KEY }}
+        run: mix hex.publish docs --yes
 
       # Exact heading match. A `sed` range address would prefix-match
       # (`## 0.6.0` also matches `## 0.6.0-alpha.2`) *and* restart on

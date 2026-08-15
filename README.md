@@ -9,9 +9,9 @@ and consumers written in any language.
 
 [![CI](https://github.com/zizq-labs/zizq-elixir/actions/workflows/ci.yml/badge.svg)](https://github.com/zizq-labs/zizq-elixir/actions/workflows/ci.yml)
 
-> **Work in progress.** This client is under active development and does
-> not yet implement the API. It is made available on GitHub for
-> visibility and feedback.
+> **Pre-release.** The API is implemented and covered by tests against
+> a real server, but it is still being refined ahead of `0.6.0`, so
+> some details may change. Pin the alpha to use it — see below.
 
 ## Installation
 
@@ -25,18 +25,14 @@ def deps do
 end
 ```
 
-The `-alpha` in the requirement is currently required: releases
+The `-alpha` in the requirement is currently necessary: releases
 during development are pre-releases, and Hex excludes those from
 ordinary requirements. A plain `~> 0.6.0` will not resolve them.
 
 Requires Elixir 1.18 or later (for the built-in `JSON` module) and
 Erlang/OTP 27 or later.
 
-## Sneak peek
-
-None of this works yet, but this is the API being built towards, and
-every detail is subject to change as development progresses. The
-examples are here purely for transparency and early feedback.
+## Usage
 
 ### Setup
 
@@ -44,7 +40,7 @@ Add a client to your supervision tree. Producers need only this:
 
 ```elixir
 children = [
-  {Zizq, name: MyApp.Zizq, url: "http://localhost:7890", format: :msgpack}
+  {Zizq, name: MyApp.Zizq, url: "http://localhost:7890"}
 ]
 ```
 
@@ -95,8 +91,8 @@ server-side defaults.
 > and `:timer.hours/1` keep call sites readable and are evaluated at
 > compile time.
 
-`perform/2` is also available when a job needs the metadata — the
-attempt count, the job id, the queue it came from:
+`perform/2` is also available when a job needs the metadata such as the
+attempt count, the job id, the queue it came from, etc:
 
 ```elixir
 @impl Zizq.JobKind
@@ -109,7 +105,7 @@ def perform(payload, _job) do
 end
 ```
 
-Define whichever arity you need; the macro wires up the one you defined
+Define whichever arity you need. The macro wires up the one you defined
 and raises at compile time if you define neither.
 
 ### Enqueuing
@@ -147,15 +143,13 @@ children = [
 
 Each job runs in its own supervised task, so a crashing job cannot take
 the worker down. On shutdown the worker stops taking new work, waits for
-in-flight jobs, flushes pending acknowledgements, and only then closes
-the connection.
+in-flight jobs, flushes pending acknowledgements, and then disconnects.
 
 ### Routing
 
 The worker's only dispatch interface is `handler:`. Anything that takes
-a `%Zizq.Job{}` — the server's job record, as distinct from the
-`Zizq.JobKind` behaviour used to declare one — and succeeds or fails.
-A `Zizq.Router` is accepted too, and dispatches by type — job types
+a `%Zizq.Job{}` (the server's job record) and succeeds or fails.
+A `Zizq.Router` is accepted too, and dispatches by job type. Job types
 are plain strings:
 
 ```elixir
@@ -165,14 +159,14 @@ Zizq.Router.new()
 |> Zizq.Router.fallback(&MyApp.unknown_job/1)
 ```
 
-Routes take the payload, or the payload and the job, as you prefer. A
+Routes take the payload, or optionally the payload and the job. A
 plain function works too (e.g. `handler: &MyApp.dispatch/1`) if you
 would rather write the dispatch yourself. Middleware is then just
-function composition; there is no separate concept for it.
+normal function composition; there is no separate concept for it.
 
 ### Job outcomes
 
-The return value of `perform/2` decides what happens next:
+The return value of `perform/2` drives what happens to the job next:
 
 ```elixir
 def perform(payload, _job) do
@@ -188,11 +182,150 @@ end
 Raising, exiting or crashing is equivalent to `{:error, _}`, with the
 exception and stacktrace reported to the server.
 
+### Finding and changing jobs
+
+One job at a time:
+
+```elixir
+{:ok, job} = Zizq.get_job(id, MyApp.Zizq)
+
+Zizq.update_job(job, MyApp.Zizq, queue: "urgent", priority: 0)
+Zizq.delete_job(job, MyApp.Zizq)
+```
+
+Updates are a merge patch: an option left out leaves that field alone,
+and `nil` clears it back to the server's default.
+
+The Zizq Elixir client also includes `Zizq.Query` for composable streaming
+queries and updates.
+
+Many at a time with a query, which pages as it goes:
+
+```elixir
+Zizq.query(MyApp.Zizq)
+|> Zizq.Query.where(queue: "emails", status: [:ready])
+|> Enum.take(10)
+```
+
+A query is enumerable, so `Enum` and `Stream` work on it and only the
+pages actually needed are fetched. The example above stops after the
+first. `Enum.count/1` asks the server to count rather than walking
+pages.
+
+Filters are the same everywhere: `:id`, `:queue`, `:type`, `:status`,
+`:priority`, `:ready_at`, `:attempts`, and `:filter` for a jq
+expression over the payload. Ranges take a number, a `Range`, or
+`[min: _, max: _]`.
+
+Acting on everything a query matches is one request:
+
+```elixir
+Zizq.query(MyApp.Zizq)
+|> Zizq.Query.where(queue: "emails", status: :dead)
+|> Zizq.Query.delete_all()
+```
+
+Add `Zizq.Query.in_pages_of/2` and it works a page at a time instead,
+which turns what would be one enormous atomic transaction into a series
+of smaller commits.
+
+When a job fails, the server keeps a record per attempt:
+
+```elixir
+{:ok, page} = Zizq.list_errors(job, MyApp.Zizq)
+```
+
+### Scheduled jobs
+
+A cron schedule is a named group of entries, installed as a whole.
+Doing this on every boot converges rather than accumulates, so every
+instance of an application can run it without coordinating:
+
+```elixir
+Zizq.Cron.new("my_app",
+  entries: [
+    [name: "nightly_cleanup",
+     expression: "0 3 * * *",
+     job: MyApp.Cleanup.new(%{})],
+    [name: "digest",
+     expression: "*/15 * * * *",
+     timezone: "Australia/Melbourne",
+     job: [type: "digest", queue: "reports"]]
+  ]
+)
+|> Zizq.replace_cron(MyApp.Zizq)
+```
+
+Or constructed with the pipeline operator:
+
+```elixir
+Zizq.Cron.new("my_app")
+|> Zizq.Cron.put_entry(
+  name: "nightly_cleanup",
+  expression: "0 3 * * *",
+  job: MyApp.Cleanup.new(%{})
+)
+|> Zizq.Cron.put_entry(
+  name: "digest",
+  expression: "*/15 * * * *",
+  timezone: "Australia/Melbourne",
+  job: [type: "digest", queue: "reports"]
+)
+|> Zizq.replace_cron(MyApp.Zizq)
+```
+
+Entries left out are removed, so what you pass is the whole schedule
+rather than just an addition to it. An entry's job is an ordinary
+enqueue, so anything you can enqueue normally you can schedule (with
+the exception of scheduled jobs with a hard-coded `:ready_at`).
+
+There is also `Zizq.get_cron/2`, `Zizq.list_crons/1`,
+`Zizq.delete_cron/2`, and `Zizq.pause_cron/2` / `Zizq.resume_cron/2`
+for the whole group or `Zizq.pause_cron_entry/2` for one entry.
+
+### Testing
+
+Assert on what your code enqueued, without a server:
+
+```elixir
+defmodule MyApp.SignupTest do
+  use ExUnit.Case, async: true
+  use Zizq.Testing, client: MyApp.Zizq
+
+  test "signing up sends a welcome email" do
+    MyApp.Signup.run("ada@example.com")
+
+    assert_enqueued(type: "send_email", payload: %{"template" => "welcome"})
+  end
+end
+```
+
+Recordings belong to the test that made them, so a fixed client name is
+safe under `async: true`. `perform_job/3` runs one handler directly and
+`drain_enqueued/2` runs everything that was enqueued.
+
+### Telemetry
+
+Jobs, enqueues and the take stream emit `:telemetry` events, so
+AppSignal, Sentry, Datadog, OpenTelemetry, etc and `Telemetry.Metrics`
+work without any glue:
+
+```elixir
+:telemetry.attach_many(
+  "zizq",
+  [[:zizq, :job, :stop], [:zizq, :job, :exception]],
+  &MyApp.Telemetry.handle/4,
+  nil
+)
+```
+
+See `Zizq.Telemetry` for every event and its metadata.
+
 ### Without the macro
 
 Zizq is a polyglot queue. Jobs enqueued here may be processed by a
 worker written in Ruby, Node or Rust, and vice versa. The macro layer is
-sugar over a plain functional API that takes maps with string keys:
+sugar over a plain functional API that takes a keyword list or map:
 
 ```elixir
 Zizq.enqueue(
@@ -209,7 +342,8 @@ Zizq.enqueue(
 
 Client versions track the server's `MAJOR.MINOR`; the `PATCH` component
 moves independently. A `0.6.x` client works with a `0.6.x` server or
-later. A `0.6.x` client is not supported with servers `< 0.6.x`.
+later. A `0.6.x` client is not supported with servers `< 0.6.x`. The
+`MAJOR` must always match.
 
 Until this client is feature-complete it will be published as
 `0.6.0-alpha.N` pre-releases. Pre-releases are opt-in — only a
@@ -231,18 +365,21 @@ To build the Hex package locally:
 ./release.sh
 ```
 
-To run the integration suite against a real server binary:
+To run the integration suite against a compatible server binary:
 
 ```bash
-./integration/run.sh \
-  --binary /path/to/zizq \
-  --tarball _build/release/zizq-<version>.tar
+./integration/run.sh --binary /path/to/zizq
 ```
+
+It builds the package from source unless `--tarball` names one. Cron,
+unique keys and batching need a licensed server, and are skipped
+without one; pass `--license-key "@/path/to/licence.jwt"` to include
+them.
 
 ## Resources
 
 * [Elixir Client Docs](https://zizq.io/docs/clients/elixir/) — Coming soon
-* [Elixir Client API reference](https://hexdocs.pm/zizq) — Coming soon
+* [Elixir Client API reference](https://hexdocs.pm/zizq)
 * [Getting Started Docs](https://zizq.io/docs/getting-started/)
 * [Zizq Command Reference](https://zizq.io/docs/cli/)
 * [Elixir Client Source](https://github.com/zizq-labs/zizq-elixir)

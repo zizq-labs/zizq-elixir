@@ -1,0 +1,19 @@
+[book]
+title = "Zizq Elixir Client"
+authors = ["Chris Corbyn"]
+description = "Zizq Elixir Client Documentation — Single Binary Job Queue Server"
+language = "en"
+src = "src"
+
+[build]
+build-dir = "../target/docs"
+
+[output.html]
+site-url = "/docs/clients/elixir/"
+additional-css = ["src/zizq_docs.css"]
+additional-js = ["src/zizq_elixir_hljs.js"]
+default-theme = "light"
+preferred-dark-theme = "light"
+
+[output.html.print]
+enable = false

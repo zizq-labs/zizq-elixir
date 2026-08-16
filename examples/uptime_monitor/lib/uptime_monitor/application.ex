@@ -20,7 +20,20 @@ defmodule UptimeMonitor.Application do
     # See https://elixir.hexdocs.pm/Supervisor.html
     # for other strategies and supported options
     opts = [strategy: :one_for_one, name: UptimeMonitor.Supervisor]
-    Supervisor.start_link(children, opts)
+
+    with {:ok, pid} <- Supervisor.start_link(children, opts) do
+      install_cron()
+      {:ok, pid}
+    end
+  end
+
+  # After the tree is up, since it needs the client. Never fatal: a
+  # server without a Pro licence refuses, and the app is still usable
+  # without periodic re-checks.
+  defp install_cron do
+    if Application.get_env(:uptime_monitor, :start_zizq?, true) do
+      UptimeMonitor.Cron.install()
+    end
   end
 
   # The Zizq client and the worker that drains this app's own queue.

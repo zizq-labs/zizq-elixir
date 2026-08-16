@@ -33,7 +33,8 @@ defmodule UptimeMonitor.Jobs do
     Zizq.Router.new([
       UptimeMonitor.Jobs.CheckUrl,
       UptimeMonitor.Jobs.DiscoverSitemapUrls,
-      UptimeMonitor.Jobs.NotifyWebhook
+      UptimeMonitor.Jobs.NotifyWebhook,
+      UptimeMonitor.Jobs.ScheduleChecks
     ])
   end
 end

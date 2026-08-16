@@ -45,10 +45,6 @@ config :logger, :default_formatter,
 # Use Jason for JSON parsing in Phoenix
 config :phoenix, :json_library, Jason
 
-# Import environment specific config. This must remain at the bottom
-# of this file so it overrides the configuration defined above.
-import_config "#{config_env()}.exs"
-
 # Zizq: where the server is, and how many jobs run at once.
 config :uptime_monitor,
   start_zizq?: true,
@@ -60,3 +56,7 @@ config :uptime_monitor,
   audit_source: "uptime_monitor",
   # Unset means status changes are recorded but not posted anywhere.
   webhook_url: nil
+
+# Import environment specific config. This must remain at the bottom
+# of this file so it overrides the configuration defined above.
+import_config "#{config_env()}.exs"

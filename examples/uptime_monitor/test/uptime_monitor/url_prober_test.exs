@@ -10,7 +10,7 @@ defmodule UptimeMonitor.UrlProberTest do
   </urlset>
   """
 
-  defp stub(fun), do: Req.Test.stub(UptimeMonitor.UrlProber, fun)
+  defp stub(fun), do: Req.Test.stub(UptimeMonitor.HTTP, fun)
 
   defp respond(conn, status, body, headers \\ []) do
     Enum.reduce(headers, conn, fn {k, v}, acc -> Plug.Conn.put_resp_header(acc, k, v) end)

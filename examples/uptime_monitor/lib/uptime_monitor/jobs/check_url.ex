@@ -15,6 +15,10 @@ defmodule UptimeMonitor.Jobs.CheckUrl do
     retry_limit: 3,
     backoff: [base: :timer.seconds(5), exponent: 2.0, jitter: :timer.seconds(5)]
 
+  require Logger
+
+  alias UptimeMonitor.Jobs
+  alias UptimeMonitor.Jobs.DiscoverSitemapUrls
   alias UptimeMonitor.Monitors
   alias UptimeMonitor.UrlProber
 
@@ -43,12 +47,36 @@ defmodule UptimeMonitor.Jobs.CheckUrl do
 
     case Monitors.record_check(url, result) do
       {:ok, _check} ->
+        maybe_discover_sitemap(url, result)
         :ok
 
       # The probe worked; writing it down did not. Worth retrying,
       # unlike a bad payload.
       {:error, changeset} ->
         {:error, "could not record check: #{inspect(changeset.errors)}"}
+    end
+  end
+
+  defp maybe_discover_sitemap(_url, %{sitemap?: false}), do: :ok
+
+  defp maybe_discover_sitemap(url, _result) do
+    enqueue = DiscoverSitemapUrls.new(%{"id" => url.id})
+
+    case Zizq.enqueue(enqueue, Jobs.client()) do
+      {:ok, _job} ->
+        :ok
+
+      # Logged rather than failed. The check is already recorded, so
+      # failing would re-probe and write a second one; and the next
+      # sweep re-detects the sitemap anyway, so nothing is lost for
+      # longer than one interval.
+      {:error, error} ->
+        Logger.warning(
+          "[uptime_monitor] #{url.url}: could not enqueue sitemap discovery " <>
+            "(#{Exception.message(error)})"
+        )
+
+        :ok
     end
   end
 end

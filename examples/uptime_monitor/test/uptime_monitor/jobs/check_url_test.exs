@@ -5,7 +5,7 @@ defmodule UptimeMonitor.Jobs.CheckUrlTest do
   alias UptimeMonitor.Jobs
   alias UptimeMonitor.Jobs.CheckUrl
 
-  defp stub(fun), do: Req.Test.stub(UptimeMonitor.UrlProber, fun)
+  defp stub(fun), do: Req.Test.stub(UptimeMonitor.HTTP, fun)
 
   defp responds(status, body \\ "") do
     stub(fn conn -> Plug.Conn.send_resp(conn, status, body) end)
@@ -86,6 +86,51 @@ defmodule UptimeMonitor.Jobs.CheckUrlTest do
 
     test "cancels a payload whose id is not an integer" do
       assert {:cancel, _} = perform_job(CheckUrl, %{"id" => "42"})
+    end
+  end
+
+  describe "sitemap discovery" do
+    setup do
+      %{url: url_fixture(%{url: "https://example.com/sitemap.xml"})}
+    end
+
+    defp serves_sitemap(body) do
+      stub(fn conn ->
+        conn
+        |> Plug.Conn.put_resp_header("content-type", "application/xml")
+        |> Plug.Conn.send_resp(200, body)
+      end)
+    end
+
+    test "enqueues discovery when the probe flags a sitemap", %{url: url} do
+      serves_sitemap(
+        ~s(<?xml version="1.0"?><urlset><url><loc>https://example.com/a</loc></url></urlset>)
+      )
+
+      assert :ok = perform_job(CheckUrl, %{"id" => url.id})
+
+      assert_enqueued(
+        type: UptimeMonitor.Jobs.DiscoverSitemapUrls.type(),
+        payload: %{"id" => url.id}
+      )
+    end
+
+    test "does not enqueue discovery for an ordinary page", %{url: url} do
+      responds(200, "<html></html>")
+
+      assert :ok = perform_job(CheckUrl, %{"id" => url.id})
+
+      refute_enqueued(type: UptimeMonitor.Jobs.DiscoverSitemapUrls.type())
+    end
+
+    # The check is recorded either way; only the follow-up differs.
+    test "does not enqueue discovery when the sitemap did not respond", %{url: url} do
+      responds(500)
+
+      assert :ok = perform_job(CheckUrl, %{"id" => url.id})
+
+      refute_enqueued(type: UptimeMonitor.Jobs.DiscoverSitemapUrls.type())
+      assert [%{status: "down"}] = Monitors.recent_checks(url)
     end
   end
 

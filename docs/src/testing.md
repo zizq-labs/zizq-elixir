@@ -159,6 +159,30 @@ Use it for anything positional or numeric — ordering, counts, "the second one
 should be scheduled for later" — where the default matching doesn't cover your
 needs.
 
+### Asserting on a second action
+
+A refutation sees everything the test has recorded, not just what the last
+call did. So a test that acts twice needs to forget the first action before it
+can say anything about the second:
+
+> Elixir:
+>
+> ```elixir
+> test "rescanning a sitemap enqueues nothing new" do
+>   MyApp.Sitemap.scan(sitemap)
+>   assert_enqueued(type: "check_url")
+>
+>   clear_enqueued()
+>
+>   MyApp.Sitemap.scan(sitemap)
+>   refute_enqueued(type: "check_url")
+> end
+> ```
+
+Without `clear_enqueued/0` that refutation always fails, and reads as a bug in
+the code rather than in the test. Clearing is scoped to the test that calls
+it, so it stays safe under `async: true`.
+
 ## Payloads are what the server would have stored
 
 A payload is normalised through JSON on the way in, exactly as it is on the

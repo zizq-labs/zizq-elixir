@@ -16,8 +16,23 @@ defmodule UptimeMonitor.Jobs do
   def queue, do: @queue
 
   @doc """
+  The name of the Zizq client this app enqueues through.
+
+  Named in one place so a handler that enqueues follow-up work does
+  not hardcode it, and the test suite can point the same name at
+  `Zizq.Testing`'s recorder.
+  """
+  @spec client() :: atom()
+  def client, do: UptimeMonitor.Zizq
+
+  @doc """
   The handler the worker runs.
   """
   @spec router() :: Zizq.Router.t()
-  def router, do: Zizq.Router.new([UptimeMonitor.Jobs.CheckUrl])
+  def router do
+    Zizq.Router.new([
+      UptimeMonitor.Jobs.CheckUrl,
+      UptimeMonitor.Jobs.DiscoverSitemapUrls
+    ])
+  end
 end

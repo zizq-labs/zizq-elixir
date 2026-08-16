@@ -34,7 +34,7 @@ config :phoenix,
 config :uptime_monitor, start_zizq?: false
 
 # Outbound HTTP in tests goes to a stub rather than the network. Tests
-# set one up with `Req.Test.stub(UptimeMonitor.UrlProber, fn conn ->
+# set one up with `Req.Test.stub(UptimeMonitor.HTTP, fn conn ->
 # ... end)`; a request with no stub registered fails loudly rather
 # than escaping to the internet.
-config :uptime_monitor, :req_options, plug: {Req.Test, UptimeMonitor.UrlProber}
+config :uptime_monitor, :req_options, plug: {Req.Test, UptimeMonitor.HTTP}

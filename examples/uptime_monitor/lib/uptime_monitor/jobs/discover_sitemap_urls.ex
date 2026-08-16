@@ -16,6 +16,7 @@ defmodule UptimeMonitor.Jobs.DiscoverSitemapUrls do
 
   require Logger
 
+  alias UptimeMonitor.Audit
   alias UptimeMonitor.Jobs
   alias UptimeMonitor.Jobs.CheckUrl
   alias UptimeMonitor.Monitors
@@ -45,6 +46,19 @@ defmodule UptimeMonitor.Jobs.DiscoverSitemapUrls do
       Logger.info(
         "[uptime_monitor] #{sitemap.url}: #{length(urls)} URL(s) listed " <>
           "(#{created} new, #{enabled} re-enabled, #{disabled} disabled)"
+      )
+
+      Audit.emit(
+        event_type: "sitemap.scanned",
+        resource: "monitored_url:#{sitemap.id}",
+        text: "Found #{length(urls)} URL(s) in #{sitemap.url}",
+        data: %{
+          "sitemap_url" => sitemap.url,
+          "discovered_count" => length(urls),
+          "created" => created,
+          "re_enabled" => enabled,
+          "disabled" => disabled
+        }
       )
 
       enqueue_checks(sitemap.url)

@@ -100,6 +100,22 @@ defmodule UptimeMonitor.Jobs.DiscoverSitemapUrlsTest do
       refute_enqueued(type: CheckUrl.type(), payload: %{"id" => gone.id})
     end
 
+    test "emits an audit event describing the scan" do
+      sitemap = sitemap_fixture()
+      serves(sitemap_of(["https://example.com/a", "https://example.com/b"]))
+
+      assert :ok = perform_job(DiscoverSitemapUrls, %{"id" => sitemap.id})
+
+      assert [event] = all_enqueued(type: UptimeMonitor.Audit.audit_type())
+      payload = event["payload"]
+
+      assert payload["event_type"] == "sitemap.scanned"
+      assert payload["resource"] == "monitored_url:#{sitemap.id}"
+      assert payload["data"]["discovered_count"] == 2
+      assert payload["data"]["created"] == 2
+      assert event["queue"] == UptimeMonitor.Audit.queue()
+    end
+
     # A sitemap index lists other sitemaps. Each becomes a monitored
     # URL, is probed, is flagged as a sitemap, and is discovered in
     # turn — nesting needs no special case.

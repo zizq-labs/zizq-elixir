@@ -53,4 +53,10 @@ import_config "#{config_env()}.exs"
 config :uptime_monitor,
   start_zizq?: true,
   zizq_url: "http://127.0.0.1:7890",
-  worker_concurrency: 25
+  worker_concurrency: 25,
+  # Where audit events go. The audit_log example drains this queue;
+  # point it somewhere nothing consumes to turn auditing off.
+  audit_queue: "audit",
+  audit_source: "uptime_monitor",
+  # Unset means status changes are recorded but not posted anywhere.
+  webhook_url: nil

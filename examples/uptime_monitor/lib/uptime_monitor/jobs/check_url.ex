@@ -17,8 +17,10 @@ defmodule UptimeMonitor.Jobs.CheckUrl do
 
   require Logger
 
+  alias UptimeMonitor.Audit
   alias UptimeMonitor.Jobs
   alias UptimeMonitor.Jobs.DiscoverSitemapUrls
+  alias UptimeMonitor.Jobs.NotifyWebhook
   alias UptimeMonitor.Monitors
   alias UptimeMonitor.UrlProber
 
@@ -43,10 +45,18 @@ defmodule UptimeMonitor.Jobs.CheckUrl do
   end
 
   defp check(url) do
+    # Read before the check is recorded, since recording is what
+    # overwrites it.
+    previous_status = url.last_status
+
     result = UrlProber.probe(url.url)
 
     case Monitors.record_check(url, result) do
-      {:ok, _check} ->
+      {:ok, recorded} ->
+        if transitioned?(previous_status, result.status) do
+          announce(url, recorded, previous_status, result.status)
+        end
+
         maybe_discover_sitemap(url, result)
         :ok
 
@@ -54,6 +64,52 @@ defmodule UptimeMonitor.Jobs.CheckUrl do
       # unlike a bad payload.
       {:error, changeset} ->
         {:error, "could not record check: #{inspect(changeset.errors)}"}
+    end
+  end
+
+  # A URL is only interesting when it *changes*.
+  #
+  #   * Same as last time — nothing to say.
+  #   * Never checked, and up — a first success is not news.
+  #   * Never checked, and down — an outage should be announced at
+  #     once rather than waiting for a second sample to compare with.
+  #   * Anything else — a genuine transition.
+  defp transitioned?(previous, current) when previous == current, do: false
+  defp transitioned?(nil, current), do: current == "down"
+  defp transitioned?(_previous, _current), do: true
+
+  defp announce(url, recorded, previous_status, current_status) do
+    Audit.emit(
+      event_type: "url.status.changed",
+      resource: "monitored_url:#{url.id}",
+      text: "#{url.url} went #{current_status}",
+      data: %{
+        "url" => url.url,
+        "from" => previous_status,
+        "to" => current_status
+      }
+    )
+
+    notify_webhook(url, recorded)
+  end
+
+  defp notify_webhook(url, recorded) do
+    enqueue = NotifyWebhook.new(%{"check_id" => recorded.id})
+
+    case Zizq.enqueue(enqueue, Jobs.client()) do
+      {:ok, _job} ->
+        :ok
+
+      # Logged rather than failed, for the same reason as below: the
+      # check is recorded, and failing would probe again and write a
+      # second one.
+      {:error, error} ->
+        Logger.warning(
+          "[uptime_monitor] #{url.url}: could not enqueue webhook notification " <>
+            "(#{Exception.message(error)})"
+        )
+
+        :ok
     end
   end
 

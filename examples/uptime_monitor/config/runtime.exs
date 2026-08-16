@@ -116,5 +116,8 @@ if config_env() != :test do
   config :uptime_monitor,
     zizq_url: System.get_env("ZIZQ_URL") || "http://127.0.0.1:7890",
     worker_concurrency: String.to_integer(System.get_env("ZIZQ_WORKER_CONCURRENCY") || "25"),
-    start_zizq?: System.get_env("START_WORKER") != "0"
+    start_zizq?: System.get_env("START_WORKER") != "0",
+    audit_queue: System.get_env("AUDIT_QUEUE") || "audit",
+    audit_source: System.get_env("AUDIT_SOURCE") || "uptime_monitor",
+    webhook_url: System.get_env("WEBHOOK_URL")
 end

@@ -134,6 +134,115 @@ defmodule UptimeMonitor.Jobs.CheckUrlTest do
     end
   end
 
+  describe "status transitions" do
+    setup do
+      %{url: url_fixture(%{url: "https://example.com"})}
+    end
+
+    defp status_change_events do
+      all_enqueued(type: UptimeMonitor.Audit.audit_type())
+      |> Enum.filter(&(&1["payload"]["event_type"] == "url.status.changed"))
+    end
+
+    # A first success is not news. An outage is, immediately — waiting
+    # for a second sample to compare against would delay every alert
+    # by a whole sweep.
+    test "a first check that is up announces nothing", %{url: url} do
+      responds(200)
+
+      assert :ok = perform_job(CheckUrl, %{"id" => url.id})
+
+      assert status_change_events() == []
+      refute_enqueued(type: UptimeMonitor.Jobs.NotifyWebhook.type())
+    end
+
+    test "a first check that is down announces at once", %{url: url} do
+      responds(503)
+
+      assert :ok = perform_job(CheckUrl, %{"id" => url.id})
+
+      assert [event] = status_change_events()
+      assert event["payload"]["data"] == %{"url" => url.url, "from" => nil, "to" => "down"}
+      assert_enqueued(type: UptimeMonitor.Jobs.NotifyWebhook.type())
+    end
+
+    test "going down after being up announces", %{url: url} do
+      responds(200)
+      assert :ok = perform_job(CheckUrl, %{"id" => url.id})
+      clear_enqueued()
+
+      responds(500)
+      assert :ok = perform_job(CheckUrl, %{"id" => url.id})
+
+      assert [event] = status_change_events()
+      assert event["payload"]["data"]["from"] == "up"
+      assert event["payload"]["data"]["to"] == "down"
+      assert event["payload"]["resource"] == "monitored_url:#{url.id}"
+      assert_enqueued(type: UptimeMonitor.Jobs.NotifyWebhook.type())
+    end
+
+    test "coming back up announces", %{url: url} do
+      responds(500)
+      assert :ok = perform_job(CheckUrl, %{"id" => url.id})
+      clear_enqueued()
+
+      responds(200)
+      assert :ok = perform_job(CheckUrl, %{"id" => url.id})
+
+      assert [event] = status_change_events()
+      assert event["payload"]["data"]["from"] == "down"
+      assert event["payload"]["data"]["to"] == "up"
+    end
+
+    # The point is to say something happened, not to stream every
+    # result.
+    test "staying up announces nothing", %{url: url} do
+      responds(200)
+      assert :ok = perform_job(CheckUrl, %{"id" => url.id})
+      clear_enqueued()
+
+      assert :ok = perform_job(CheckUrl, %{"id" => url.id})
+
+      assert status_change_events() == []
+      refute_enqueued(type: UptimeMonitor.Jobs.NotifyWebhook.type())
+    end
+
+    test "staying down announces nothing", %{url: url} do
+      responds(500)
+      assert :ok = perform_job(CheckUrl, %{"id" => url.id})
+      clear_enqueued()
+
+      assert :ok = perform_job(CheckUrl, %{"id" => url.id})
+
+      assert status_change_events() == []
+      refute_enqueued(type: UptimeMonitor.Jobs.NotifyWebhook.type())
+    end
+
+    test "the webhook job names the check that was just recorded", %{url: url} do
+      responds(503)
+
+      assert :ok = perform_job(CheckUrl, %{"id" => url.id})
+
+      [check] = Monitors.recent_checks(url)
+
+      assert_enqueued(
+        type: UptimeMonitor.Jobs.NotifyWebhook.type(),
+        payload: %{"check_id" => check.id}
+      )
+    end
+
+    test "the audit event goes to the audit queue, not this app's", %{url: url} do
+      responds(503)
+
+      assert :ok = perform_job(CheckUrl, %{"id" => url.id})
+
+      assert [event] = status_change_events()
+      assert event["queue"] == UptimeMonitor.Audit.queue()
+      assert event["payload"]["source"] == UptimeMonitor.Audit.source()
+      assert event["payload"]["occurred_at"] =~ ~r/^\d{4}-\d{2}-\d{2}T/
+    end
+  end
+
   describe "the router" do
     test "dispatches check_url" do
       url = url_fixture()

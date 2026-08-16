@@ -16,8 +16,11 @@ config :audit_log, AuditLog.Repo,
 # overrides this and needs no server.
 config :audit_log,
   start_zizq?: true,
+  start_web?: true,
   zizq_url: "http://127.0.0.1:7890",
-  worker_concurrency: 25
+  worker_concurrency: 25,
+  web_bind: {127, 0, 0, 1},
+  web_port: 3000
 
 config :logger, :console, format: "$time [$level] $message\n"
 

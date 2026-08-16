@@ -26,6 +26,8 @@ defmodule AuditLog.MixProject do
   defp deps do
     [
       {:zizq, path: "../.."},
+      {:plug, "~> 1.16"},
+      {:bandit, "~> 1.5"},
       {:ecto_sql, "~> 3.12"},
       {:ecto_sqlite3, "~> 0.17"},
       {:jason, "~> 1.4"}

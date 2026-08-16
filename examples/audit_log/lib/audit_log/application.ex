@@ -6,17 +6,24 @@ defmodule AuditLog.Application do
 
   use Application
 
+  require Logger
+
   @impl true
   def start(_type, _args) do
-    children = [AuditLog.Repo | zizq_children()]
+    children = [AuditLog.Repo] ++ zizq_children() ++ web_children()
 
     Supervisor.start_link(children, strategy: :one_for_one, name: AuditLog.Supervisor)
   end
 
-  # The test suite runs handlers directly through `Zizq.Testing`, so it
-  # sets `start_zizq?: false` and needs no server to talk to.
+  # Web and worker are separate roles, so a deployment can scale them
+  # apart. Both run here by default because one command is friendlier
+  # to try. The test suite runs handlers directly through
+  # `Zizq.Testing` and calls the router with `Plug.Test`, so it starts
+  # neither.
   defp zizq_children do
     if Application.get_env(:audit_log, :start_zizq?, true) do
+      Logger.info("[audit_log] worker draining #{AuditLog.Jobs.queue()}")
+
       [
         {Zizq, name: AuditLog.Zizq, url: Application.fetch_env!(:audit_log, :zizq_url)},
         {Zizq.Worker,
@@ -25,6 +32,19 @@ defmodule AuditLog.Application do
          concurrency: Application.fetch_env!(:audit_log, :worker_concurrency),
          handler: AuditLog.Jobs.router()}
       ]
+    else
+      []
+    end
+  end
+
+  defp web_children do
+    if Application.get_env(:audit_log, :start_web?, true) do
+      bind = Application.fetch_env!(:audit_log, :web_bind)
+      port = Application.fetch_env!(:audit_log, :web_port)
+
+      Logger.info("[audit_log] web listening on http://#{:inet.ntoa(bind)}:#{port}")
+
+      [{Bandit, plug: AuditLog.Web.Router, ip: bind, port: port}]
     else
       []
     end

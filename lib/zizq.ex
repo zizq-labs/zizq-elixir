@@ -9,11 +9,6 @@ defmodule Zizq do
   LSM database — not on Redis, and not on your RDBMS. It supports
   multiple producers and multiple consumers across an entire stack,
   with producers and consumers written in any language.
-
-  > #### Work in progress {: .warning}
-  >
-  > This client is under active development and does not yet implement
-  > the API.
   """
 
   # Read at compile time rather than via `Application.spec/2` at

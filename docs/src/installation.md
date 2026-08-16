@@ -12,7 +12,7 @@ package. Add it to your dependencies:
 > ```elixir
 > def deps do
 >   [
->     {:zizq, "~> 0.6.0-alpha"}
+>     {:zizq, "~> 0.6.0"}
 >   ]
 > end
 > ```
@@ -26,12 +26,6 @@ package. Add it to your dependencies:
 The client requires **Elixir 1.18** or later and **Erlang/OTP 27** or later.
 Elixir 1.18 is the floor because the client uses the built-in `JSON` module
 rather than carrying a JSON dependency of its own.
-
-> [!NOTE]
-> The `-alpha` in the requirement is currently necessary. Releases during
-> development are pre-releases, and Hex excludes those from ordinary
-> requirements — a plain `~> 0.6.0` will not resolve them. Once `0.6.0` is
-> released, `~> 0.6.0` is the requirement you want.
 
 ## Versioning
 

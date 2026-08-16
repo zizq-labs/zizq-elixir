@@ -156,6 +156,72 @@ defmodule Zizq.TestingTest do
     end
   end
 
+  describe "clear_enqueued/0" do
+    # Without this a test that acts twice cannot refute anything: the
+    # first action's enqueues are still recorded, and a refutation has
+    # no way to tell which action produced them.
+    test "later assertions see only what follows it" do
+      Zizq.enqueue([type: "first"], MyApp.Zizq)
+
+      clear_enqueued()
+
+      Zizq.enqueue([type: "second"], MyApp.Zizq)
+
+      assert_enqueued(type: "second")
+      refute_enqueued(type: "first")
+    end
+
+    test "empties all_enqueued/1" do
+      Zizq.enqueue([type: "first"], MyApp.Zizq)
+
+      assert clear_enqueued() == :ok
+
+      assert all_enqueued() == []
+    end
+
+    test "clearing when nothing was recorded is fine" do
+      assert clear_enqueued() == :ok
+      assert all_enqueued() == []
+    end
+
+    test "a job enqueued afterwards still drains" do
+      Zizq.enqueue([type: "before"], MyApp.Zizq)
+      assert drain_enqueued(fn _job -> :ok end) == 1
+
+      clear_enqueued()
+
+      Zizq.enqueue([type: "after"], MyApp.Zizq)
+
+      assert drain_enqueued(fn _job -> :ok end) == 1
+    end
+
+    # Clearing is scoped to the test that calls it, which is what
+    # keeps a fixed client name safe under `async: true`.
+    test "does not disturb another test's recordings (a)" do
+      Zizq.enqueue([type: "keep_a"], MyApp.Zizq)
+      clear_enqueued()
+      Zizq.enqueue([type: "keep_a"], MyApp.Zizq)
+
+      assert ["keep_a"] = Enum.map(all_enqueued(), & &1["type"])
+    end
+
+    test "does not disturb another test's recordings (b)" do
+      Zizq.enqueue([type: "keep_b"], MyApp.Zizq)
+      clear_enqueued()
+      Zizq.enqueue([type: "keep_b"], MyApp.Zizq)
+
+      assert ["keep_b"] = Enum.map(all_enqueued(), & &1["type"])
+    end
+
+    test "an enqueue from a Task is cleared with the test's own" do
+      Task.async(fn -> Zizq.enqueue([type: "from_task"], MyApp.Zizq) end) |> Task.await()
+
+      clear_enqueued()
+
+      assert all_enqueued() == []
+    end
+  end
+
   describe "isolation" do
     # The property that makes a fixed client name safe under async:
     # recordings belong to the test, not to the client.

@@ -1,0 +1,84 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>Audit Log</title>
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <link rel="stylesheet" href="/styles.css">
+</head>
+<body>
+  <header>
+    <h1>Audit Log</h1>
+    <p class="hint">
+      Events from systems that have integrated with this sink.
+      Producers enqueue <code>audit.create</code> jobs to the
+      <code><%= h(assigns.queue) %></code> queue.
+    </p>
+    <%= if length(assigns.sources) > 1 do %>
+      <p class="sources">
+        <%= if assigns.source do %>
+          <a href="/">All</a>
+        <% else %>
+          <strong>All</strong>
+        <% end %>
+        <%= for source <- assigns.sources do %>
+          <%= if source == assigns.source do %>
+            <strong><%= h(source) %></strong>
+          <% else %>
+            <a href="/?source=<%= h(URI.encode_www_form(source)) %>"><%= h(source) %></a>
+          <% end %>
+        <% end %>
+      </p>
+    <% end %>
+  </header>
+
+  <main>
+    <%= if assigns.events == [] do %>
+      <p class="empty">No audit events yet.</p>
+    <% else %>
+      <table class="events">
+        <thead>
+          <tr>
+            <th>When</th>
+            <th>Source</th>
+            <th>Type</th>
+            <th>Actor</th>
+            <th>Resource</th>
+            <th>Text</th>
+            <th>Data</th>
+          </tr>
+        </thead>
+        <tbody>
+          <%= for event <- assigns.events do %>
+            <tr>
+              <td class="when" title="<%= h(DateTime.to_iso8601(event.occurred_at)) %>"><%= h(time_ago(event.occurred_at)) %></td>
+              <td class="source"><%= h(event.source) %></td>
+              <td class="type"><code><%= h(event.event_type) %></code></td>
+              <td><%= h(event.actor) %></td>
+              <td class="resource"><%= h(event.resource) %></td>
+              <td><%= h(event.text) %></td>
+              <td class="data">
+                <% formatted = format_data(event.data) %>
+                <%= if formatted != "" do %>
+                  <pre><%= h(formatted) %></pre>
+                <% end %>
+              </td>
+            </tr>
+          <% end %>
+        </tbody>
+      </table>
+
+      <%= if assigns.has_cursor or assigns.next_cursor do %>
+        <p class="pagination">
+          <%= if assigns.has_cursor do %>
+            <a href="<%= h(assigns.newest_path) %>">&larr; Newest</a>
+          <% end %>
+          <%= if assigns.next_cursor do %>
+            <a href="<%= h(assigns.next_path) %>">Older &rarr;</a>
+          <% end %>
+        </p>
+      <% end %>
+    <% end %>
+  </main>
+</body>
+</html>

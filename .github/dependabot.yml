@@ -7,10 +7,19 @@
 # only mix.lock moves, keeping dev/CI on the latest resolved versions.
 # Public-facing `deps` constraints stay stable for Hex consumers, whose
 # `~>` requirements already accept future patch/minor releases.
+#
+# IMPORTANT: the example apps under `examples/` have their own
+# `mix.lock` files and are NOT covered by the root entry. A directory
+# missing from the list below is invisible to version updates — and to
+# the automatic PRs that fix a security advisory, so an alert gets
+# raised and then never patched. Add every new example here.
 version: 2
 updates:
   - package-ecosystem: "mix"
-    directory: "/"
+    directories:
+      - "/"
+      - "/examples/audit_log"
+      - "/examples/uptime_monitor"
     schedule:
       interval: "weekly"
       day: "monday"

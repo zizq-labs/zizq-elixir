@@ -1,5 +1,63 @@
 # Changelog
 
+## 0.6.0
+
+First stable release. No API changes since `0.6.0-alpha.9` — this
+promotes the alpha series, summarised below for anyone arriving
+without having followed it. Requires Elixir 1.18 or newer.
+
+### Producing
+
+- **`Zizq.enqueue/2`** and **`Zizq.enqueue_all/2`** — one job, or many
+  in a single atomic request. Every function has a `!` variant that
+  raises rather than returning `{:error, _}`
+- **`Zizq.JobKind`** — declare a job's type, its enqueue defaults and
+  what running it does, in one module. Optional: a keyword list
+  enqueues just as well, which is all a producer needs
+- **Unique jobs** — deduplicate at enqueue time by a literal key or one
+  derived from the payload, scoped to `:queued`, `:active` or `:exists`
+- **Batched jobs** — fold many enqueues into one job, with the
+  `when`/`fold` expressions generated from a `:limit` and a `:path`
+
+### Consuming
+
+- **`Zizq.Worker`** — a supervised process group that streams jobs,
+  runs each in its own task, batches acknowledgements and drains
+  cleanly on shutdown
+- **`Zizq.Router`** — dispatch several kinds of job through one worker,
+  by type. An unrecognised type raises rather than being swallowed,
+  unless a fallback is given
+- **Outcomes** — a handler's return value decides the job's fate:
+  `:ok`, `{:error, _}`, `{:cancel, _}` or `{:snooze, _}`
+
+### Reading and managing
+
+- **`Zizq.Query`** — a composable, enumerable query that paginates for
+  you. `Enum.count/1` asks the server rather than walking pages, and
+  `update_all/2` / `delete_all/1` can work a bounded page at a time
+- **Direct functions** — `list_jobs/2`, `count_jobs/2`, `get_job/2`,
+  `update_job/3`, `delete_job/2`, their bulk equivalents,
+  `list_queues/1`, `list_errors/3` and `erase_all_data/1`
+- **`Zizq.Cron`** — install a schedule as a whole, atomically and
+  idempotently, or amend a single entry in one request
+
+### Observability and testing
+
+- **`Zizq.Telemetry`** — `:telemetry` spans for jobs and enqueues, plus
+  take-stream connect/disconnect events
+- **`Zizq.Testing`** — assert on what your code enqueued and run
+  handlers directly, with no server and no network
+
+### Notes
+
+- Unique jobs, batched jobs and cron scheduling need a Zizq **Pro**
+  licence on the server. Without one the server answers 403, which
+  arrives as `%Zizq.Error{reason: :forbidden}`
+- Durations are integer milliseconds throughout, and payloads are
+  always string-keyed by the time a handler sees them
+- Guide at <https://zizq.io/docs/clients/elixir/>, API reference on
+  HexDocs
+
 ## 0.6.0-alpha.9
 
 ### Added

@@ -9,10 +9,6 @@ and consumers written in any language.
 
 [![CI](https://github.com/zizq-labs/zizq-elixir/actions/workflows/ci.yml/badge.svg)](https://github.com/zizq-labs/zizq-elixir/actions/workflows/ci.yml)
 
-> **Pre-release.** The API is implemented and covered by tests against
-> a real server, but it is still being refined ahead of `0.6.0`, so
-> some details may change. Pin the alpha to use it — see below.
-
 ## Installation
 
 Add `zizq` to your dependencies in `mix.exs`:
@@ -20,14 +16,10 @@ Add `zizq` to your dependencies in `mix.exs`:
 ```elixir
 def deps do
   [
-    {:zizq, "~> 0.6.0-alpha"}
+    {:zizq, "~> 0.6.0"}
   ]
 end
 ```
-
-The `-alpha` in the requirement is currently necessary: releases
-during development are pre-releases, and Hex excludes those from
-ordinary requirements. A plain `~> 0.6.0` will not resolve them.
 
 Requires Elixir 1.18 or later (for the built-in `JSON` module) and
 Erlang/OTP 27 or later.
@@ -345,12 +337,6 @@ moves independently. A `0.6.x` client works with a `0.6.x` server or
 later. A `0.6.x` client is not supported with servers `< 0.6.x`. The
 `MAJOR` must always match.
 
-Until this client is feature-complete it will be published as
-`0.6.0-alpha.N` pre-releases. Pre-releases are opt-in — only a
-requirement that itself names a pre-release (such as `~> 0.6.0-alpha`)
-will resolve one — so the eventual `0.6.0` is the first version an
-ordinary `~> 0.6.0` will pick up.
-
 ## Development
 
 ```bash
@@ -378,7 +364,7 @@ them.
 
 ## Resources
 
-* [Elixir Client Docs](https://zizq.io/docs/clients/elixir/) — Coming soon
+* [Elixir Client Docs](https://zizq.io/docs/clients/elixir/)
 * [Elixir Client API reference](https://hexdocs.pm/zizq)
 * [Getting Started Docs](https://zizq.io/docs/getting-started/)
 * [Zizq Command Reference](https://zizq.io/docs/cli/)

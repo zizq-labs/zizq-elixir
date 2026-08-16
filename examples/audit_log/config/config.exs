@@ -3,13 +3,21 @@ import Config
 config :audit_log, ecto_repos: [AuditLog.Repo]
 
 config :audit_log, AuditLog.Repo,
-  database: System.get_env("DATABASE_PATH") || "storage/#{config_env()}.sqlite3",
+  database: "storage/#{config_env()}.sqlite3",
   # WAL lets the web process read while the worker writes. Without it
   # SQLite locks the whole file for the duration of a write.
   journal_mode: :wal,
   # SQLite serialises writes anyway, so a deep pool buys nothing and
   # just moves contention from the pool to the file lock.
   pool_size: 5
+
+# The queue this app drains, and whether to connect to Zizq at all.
+# The test suite runs handlers directly through `Zizq.Testing`, so it
+# overrides this and needs no server.
+config :audit_log,
+  start_zizq?: true,
+  zizq_url: "http://127.0.0.1:7890",
+  worker_concurrency: 25
 
 config :logger, :console, format: "$time [$level] $message\n"
 

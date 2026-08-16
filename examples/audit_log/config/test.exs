@@ -7,4 +7,6 @@ config :audit_log, AuditLog.Repo,
   # produce `database is locked` under any real concurrency.
   pool_size: 1
 
+config :audit_log, start_zizq?: false
+
 config :logger, level: :warning

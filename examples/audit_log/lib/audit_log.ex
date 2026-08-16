@@ -81,6 +81,26 @@ defmodule AuditLog do
   end
 
   @doc """
+  A changeset's errors as one readable line.
+
+  The job handler puts this in the reason it cancels with, so the
+  message stored against the dead job names the fields the producer
+  got wrong rather than being an inspected struct.
+
+      "occurred_at can't be blank; source can't be blank"
+  """
+  @spec describe_errors(Ecto.Changeset.t()) :: String.t()
+  def describe_errors(%Ecto.Changeset{} = changeset) do
+    changeset
+    |> Ecto.Changeset.traverse_errors(fn {message, opts} ->
+      Regex.replace(~r"%{(\w+)}", message, fn _whole, key ->
+        opts |> Keyword.get(String.to_existing_atom(key), "") |> to_string()
+      end)
+    end)
+    |> Enum.map_join("; ", fn {field, messages} -> "#{field} #{Enum.join(messages, ", ")}" end)
+  end
+
+  @doc """
   Fetch one event, or `nil`.
   """
   @spec get_event(integer()) :: AuditEvent.t() | nil

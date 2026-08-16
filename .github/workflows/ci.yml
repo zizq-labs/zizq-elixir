@@ -219,20 +219,80 @@ jobs:
           fi
           ./integration/run.sh "${ARGS[@]}"
 
+  # --- Examples ---
+  # The two example apps under `examples/` depend on this client by
+  # path, so they exercise the source tree rather than a published
+  # package. Both are also where awkward corners in the client tend to
+  # surface first, which is why they gate merges.
+
+  examples:
+    name: Examples (${{ matrix.example }})
+    needs: check
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        example:
+          - audit_log
+          - uptime_monitor
+    defaults:
+      run:
+        working-directory: examples/${{ matrix.example }}
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Set up BEAM
+        id: beam
+        uses: erlef/setup-beam@v1
+        with:
+          elixir-version: ${{ env.ELIXIR_VERSION }}
+          otp-version: ${{ env.OTP_VERSION }}
+
+      # Keyed on the example's own lockfile *and* the client's mix.exs:
+      # a change to the client is a change to what these compile
+      # against, since they depend on it by path.
+      - name: Cache deps + build
+        uses: actions/cache@v6
+        with:
+          path: |
+            examples/${{ matrix.example }}/deps
+            examples/${{ matrix.example }}/_build
+          key: ${{ runner.os }}-mix-example-${{ matrix.example }}-${{ steps.beam.outputs.elixir-version }}-${{ steps.beam.outputs.otp-version }}-${{ hashFiles(format('examples/{0}/mix.lock', matrix.example), 'mix.exs') }}
+          restore-keys: |
+            ${{ runner.os }}-mix-example-${{ matrix.example }}-${{ steps.beam.outputs.elixir-version }}-${{ steps.beam.outputs.otp-version }}-
+
+      - name: Fetch dependencies
+        run: mix deps.get
+
+      - name: mix format --check-formatted
+        run: mix format --check-formatted
+
+      # `--force` so a restored `_build` cache cannot hide a warning by
+      # skipping recompilation.
+      - name: Compile (warnings as errors)
+        run: mix compile --force --warnings-as-errors
+
+      # Neither suite needs a Zizq server or a network: handlers run
+      # through `Zizq.Testing`, and outbound HTTP goes to a stub.
+      - name: Test
+        run: mix test
+
   # --- Gate (stable check name for branch protection) ---
 
   gate:
     name: Gate
     runs-on: ubuntu-latest
-    needs: [test, integration]
+    needs: [test, integration, examples]
     if: always()
     steps:
       - run: |
           if [ "${{ needs.test.result }}" != "success" ] || \
-             [ "${{ needs.integration.result }}" != "success" ]; then
+             [ "${{ needs.integration.result }}" != "success" ] || \
+             [ "${{ needs.examples.result }}" != "success" ]; then
             echo "Required checks failed or were skipped."
             echo "  Test: ${{ needs.test.result }}"
             echo "  Integration: ${{ needs.integration.result }}"
+            echo "  Examples: ${{ needs.examples.result }}"
             exit 1
           fi
 

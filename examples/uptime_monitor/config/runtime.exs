@@ -109,3 +109,12 @@ if config_env() == :prod do
   #
   # Check `Plug.SSL` for all available options in `force_ssl`.
 end
+
+if config_env() != :test do
+  # Runtime rather than compile time, so the environment the app is
+  # started with is the one that takes effect.
+  config :uptime_monitor,
+    zizq_url: System.get_env("ZIZQ_URL") || "http://127.0.0.1:7890",
+    worker_concurrency: String.to_integer(System.get_env("ZIZQ_WORKER_CONCURRENCY") || "25"),
+    start_zizq?: System.get_env("START_WORKER") != "0"
+end

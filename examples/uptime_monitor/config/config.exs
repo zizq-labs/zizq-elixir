@@ -48,3 +48,9 @@ config :phoenix, :json_library, Jason
 # Import environment specific config. This must remain at the bottom
 # of this file so it overrides the configuration defined above.
 import_config "#{config_env()}.exs"
+
+# Zizq: where the server is, and how many jobs run at once.
+config :uptime_monitor,
+  start_zizq?: true,
+  zizq_url: "http://127.0.0.1:7890",
+  worker_concurrency: 25

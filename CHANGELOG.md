@@ -1,5 +1,29 @@
 # Changelog
 
+## 0.6.0-alpha.9
+
+### Added
+
+- **`Zizq.Testing.clear_enqueued/0`.** Forgets what a test has
+  recorded so far, so a test that acts twice can assert on the second
+  action alone:
+
+      MyApp.Sitemap.scan(sitemap)
+      assert_enqueued(type: "check_url")
+
+      clear_enqueued()
+
+      # The second scan should find nothing new to do.
+      MyApp.Sitemap.scan(sitemap)
+      refute_enqueued(type: "check_url")
+
+  Without it a refutation cannot tell the two actions apart, since the
+  first one's enqueues are still recorded. Clearing is scoped to the
+  test that calls it, so it stays safe under `async: true`.
+
+  Found while writing the `uptime_monitor` example, where a sitemap is
+  rescanned and the second pass should enqueue nothing new.
+
 ## 0.6.0-alpha.8
 
 Adds a composable query over the listing endpoints, so paging is

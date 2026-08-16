@@ -63,6 +63,9 @@ defmodule Zizq.Testing do
   `all_enqueued/1` returns the matching enqueues for anything the
   assertions do not cover.
 
+  `clear_enqueued/0` forgets what has been recorded so far, so a test
+  that acts twice can assert on the second action alone.
+
   ## Payloads are what the server would have stored
 
   A payload is normalised through JSON on the way in, exactly as it is
@@ -90,6 +93,7 @@ defmodule Zizq.Testing do
           refute_enqueued: 1,
           all_enqueued: 0,
           all_enqueued: 1,
+          clear_enqueued: 0,
           perform_job: 2,
           perform_job: 3,
           drain_enqueued: 1,
@@ -216,6 +220,41 @@ defmodule Zizq.Testing do
     |> :ets.lookup({:enqueue, owner() || self()})
     |> Enum.map(&elem(&1, 1))
     |> Enum.filter(&matches?(&1, filters))
+  end
+
+  @doc """
+  Forget everything recorded so far.
+
+  Assertions after this see only what was enqueued from here on, which
+  is what a test that acts twice needs: the first action's enqueues
+  would otherwise still be sitting there for `refute_enqueued/1` to
+  find, and a refutation cannot tell the two apart.
+
+      MyApp.Sitemap.scan(sitemap)
+      assert_enqueued(type: "check_url")
+
+      clear_enqueued()
+
+      # The second scan should find nothing new to do.
+      MyApp.Sitemap.scan(sitemap)
+      refute_enqueued(type: "check_url")
+
+  Only this test's recordings go, so it is safe under `async: true`.
+
+  Drain bookkeeping is dropped alongside them, so "cleared" means
+  cleared rather than half-cleared. That has no effect you can
+  observe — every enqueue gets a fresh id, so an already-drained one
+  could never come up again — it just keeps the two halves of a
+  test's state from disagreeing.
+  """
+  @spec clear_enqueued() :: :ok
+  def clear_enqueued do
+    owner = owner() || self()
+
+    :ets.match_delete(@table, {{:enqueue, owner}, :_})
+    :ets.match_delete(@table, {{:drained, owner}, :_})
+
+    :ok
   end
 
   @doc """

@@ -14,6 +14,32 @@ defmodule UptimeMonitor.Monitors do
   alias UptimeMonitor.Monitors.MonitoredUrl
   alias UptimeMonitor.Repo
 
+  @topic "monitors"
+
+  @doc """
+  Subscribe to changes, so a live view updates as the worker writes.
+
+  This is what makes the page live without polling: a probe recorded
+  in a worker's task is broadcast here and rendered in whatever
+  browsers happen to be watching.
+  """
+  @spec subscribe() :: :ok | {:error, term()}
+  def subscribe, do: Phoenix.PubSub.subscribe(UptimeMonitor.PubSub, @topic)
+
+  # Broadcast from the context rather than from the job handlers, so
+  # anything that changes a monitored URL announces it — including a
+  # path added later that forgets to.
+  defp broadcast(message) do
+    Phoenix.PubSub.broadcast(UptimeMonitor.PubSub, @topic, message)
+  end
+
+  defp broadcast({:ok, _value} = result, message) do
+    broadcast(message)
+    result
+  end
+
+  defp broadcast(other, _message), do: other
+
   @doc """
   Every monitored URL, most recently checked last so a never-checked
   URL sorts to the top and is visibly waiting.
@@ -40,8 +66,17 @@ defmodule UptimeMonitor.Monitors do
   """
   @spec find_url(String.t(), String.t() | nil) :: MonitoredUrl.t() | nil
   def find_url(url, source_sitemap_url \\ nil) do
-    Repo.get_by(MonitoredUrl, url: url, source_sitemap_url: source_sitemap_url)
+    MonitoredUrl
+    |> where([u], u.url == ^url)
+    |> scope_to_sitemap(source_sitemap_url)
+    |> Repo.one()
   end
+
+  # `Repo.get_by/2` cannot express this: Ecto refuses `field == nil`,
+  # since in SQL that is never true. A manual URL is exactly the one
+  # with no sitemap, so the nil case has to be `is_nil/1`.
+  defp scope_to_sitemap(query, nil), do: where(query, [u], is_nil(u.source_sitemap_url))
+  defp scope_to_sitemap(query, sitemap), do: where(query, [u], u.source_sitemap_url == ^sitemap)
 
   @doc """
   Start monitoring a URL.
@@ -51,6 +86,7 @@ defmodule UptimeMonitor.Monitors do
     %MonitoredUrl{}
     |> MonitoredUrl.changeset(attrs)
     |> Repo.insert()
+    |> broadcast(:urls_changed)
   end
 
   @doc """
@@ -65,7 +101,9 @@ defmodule UptimeMonitor.Monitors do
   Stop monitoring a URL, discarding its checks.
   """
   @spec delete_url(MonitoredUrl.t()) :: {:ok, MonitoredUrl.t()} | {:error, Ecto.Changeset.t()}
-  def delete_url(%MonitoredUrl{} = url), do: Repo.delete(url)
+  def delete_url(%MonitoredUrl{} = url) do
+    url |> Repo.delete() |> broadcast(:urls_changed)
+  end
 
   @doc """
   Record a probe's result and roll it up onto the URL.
@@ -98,7 +136,7 @@ defmodule UptimeMonitor.Monitors do
     |> Multi.update(:url, MonitoredUrl.changeset(url, url_attrs))
     |> Repo.transaction()
     |> case do
-      {:ok, %{check: check}} -> {:ok, check}
+      {:ok, %{check: check}} -> broadcast({:ok, check}, :urls_changed)
       {:error, _step, changeset, _changes} -> {:error, changeset}
     end
   end
@@ -177,6 +215,8 @@ defmodule UptimeMonitor.Monitors do
       set_children_enabled(sitemap_url, false, fn query ->
         where(query, [u], u.url not in ^discovered and u.enabled)
       end)
+
+    if created + enabled + disabled > 0, do: broadcast(:urls_changed)
 
     {created, enabled, disabled}
   end

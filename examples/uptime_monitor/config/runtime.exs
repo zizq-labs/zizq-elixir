@@ -23,6 +23,26 @@ end
 config :uptime_monitor, UptimeMonitorWeb.Endpoint,
   http: [port: String.to_integer(System.get_env("PORT", "4000"))]
 
+# Bind address. Only applied when set, so leaving it alone keeps each
+# environment's own default — loopback in dev, so the dashboard is not
+# exposed to the network by accident.
+#
+# `:inet` wants a tuple rather than a string, and parsing it here
+# means a typo fails at boot naming the variable, instead of surfacing
+# as an obscure listener error.
+if bind = System.get_env("BIND") do
+  ip =
+    case bind |> String.to_charlist() |> :inet.parse_address() do
+      {:ok, ip} ->
+        ip
+
+      {:error, _reason} ->
+        raise "BIND must be an IP address, e.g. 0.0.0.0 or ::, got: #{inspect(bind)}"
+    end
+
+  config :uptime_monitor, UptimeMonitorWeb.Endpoint, http: [ip: ip]
+end
+
 if config_env() == :dev do
   # Reload browser tabs when matching files change.
   config :uptime_monitor, UptimeMonitorWeb.Endpoint,

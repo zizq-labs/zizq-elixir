@@ -16,7 +16,7 @@ Add `zizq` to your dependencies in `mix.exs`:
 ```elixir
 def deps do
   [
-    {:zizq, "~> 0.6.0"}
+    {:zizq, "~> 0.6.1"}
   ]
 end
 ```

@@ -18,6 +18,9 @@ config :audit_log,
   start_zizq?: true,
   start_web?: true,
   zizq_url: "http://127.0.0.1:7890",
+  # Certificates for an https:// server. Empty means plain HTTP, or
+  # HTTPS verified against the system trust store.
+  zizq_tls: [],
   worker_concurrency: 25,
   web_bind: {127, 0, 0, 1},
   web_port: 3000

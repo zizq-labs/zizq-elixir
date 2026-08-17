@@ -1,5 +1,43 @@
 # Changelog
 
+## 0.6.1
+
+### Added
+
+- **TLS configuration, including mutual TLS.** A new `:tls` option on
+  the client:
+
+      {Zizq,
+       name: MyApp.Zizq,
+       url: "https://zizq.internal:7890",
+       tls: [
+         ca: "/etc/zizq/ca.pem",
+         client_cert: "/etc/zizq/client.pem",
+         client_key: "/etc/zizq/client-key.pem"
+       ]}
+
+  `:ca` verifies the server against a private authority instead of the
+  system trust store; `:client_cert` and `:client_key` present a client
+  identity for mutual TLS, which needs a Zizq Pro licence on the
+  server. An `https://` URL still needs no configuration at all —
+  connections already verify against the system trust store.
+
+  Each value may be the PEM contents or a path to a file holding them,
+  matching the Ruby client so the same material is configured the same
+  way from either.
+
+  The options apply to **both** connections a client opens: the pooled
+  HTTP/2 one carrying requests, and the separate HTTP/1.1 one a
+  worker's take stream owns. A worker is not quietly exempt from the
+  verification the rest of the client does.
+
+  Configuration is checked when the client starts, so a missing file, a
+  certificate without its key, or `:tls` on an `http://` URL fails at
+  boot rather than as a handshake error on the first request.
+
+  This closes the one capability the Elixir client was missing that the
+  Ruby, Node and Rust clients all advertise.
+
 ## 0.6.0
 
 First stable release. No API changes since `0.6.0-alpha.9` — this

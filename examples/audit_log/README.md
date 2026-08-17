@@ -106,6 +106,65 @@ curl -X POST http://127.0.0.1:7890/jobs \
 The router matches on `"audit.create"`, stores the row, and it appears
 in the feed.
 
+## Connecting over TLS
+
+The client speaks HTTPS with no configuration — certificates are verified
+against the system trust store. Set these only for a **private CA** or for
+**mutual TLS**, where the server demands a client certificate:
+
+| Variable | Meaning |
+| --- | --- |
+| `ZIZQ_TLS_CA` | Verify the server against this authority instead of the system trust store |
+| `ZIZQ_TLS_CLIENT_CERT` | Client certificate to present |
+| `ZIZQ_TLS_CLIENT_KEY` | Its private key |
+
+Each may be the PEM contents or a path to a file. `CLIENT_CERT` and
+`CLIENT_KEY` are needed together — either alone fails at boot, since a
+certificate with no key presents nothing.
+
+Set none of them and nothing changes.
+
+### Trying it against a real server
+
+Mutual TLS needs a Zizq **Pro** licence on the server. Generate a CA, a
+server certificate and a client certificate:
+
+```sh
+zizq tls init --client worker --out-dir /tmp/zizq-tls
+```
+
+Start the server requiring a client certificate:
+
+```sh
+zizq serve \
+    --license-key "@/path/to/license.jwt" \
+    --tls-cert /tmp/zizq-tls/server-cert.pem \
+    --tls-key /tmp/zizq-tls/server-key.pem \
+    --tls-client-ca /tmp/zizq-tls/ca-cert.pem
+```
+
+Then point this app at it:
+
+```sh
+ZIZQ_URL=https://localhost:7890 \
+ZIZQ_TLS_CA=/tmp/zizq-tls/ca-cert.pem \
+ZIZQ_TLS_CLIENT_CERT=/tmp/zizq-tls/client-worker-cert.pem \
+ZIZQ_TLS_CLIENT_KEY=/tmp/zizq-tls/client-worker-key.pem \
+mix run --no-halt
+```
+
+A successful boot logs `[zizq] worker connected to https://localhost:7890`,
+which means the take stream completed the handshake — that stream opens its
+own connection separately from the request pool, so seeing it connect proves
+both paths work.
+
+To prove the server really is enforcing it, drop the client certificate and
+watch the connection be refused:
+
+```sh
+ZIZQ_URL=https://localhost:7890 ZIZQ_TLS_CA=/tmp/zizq-tls/ca-cert.pem mix run --no-halt
+```
+
 ## The payload contract
 
 This is everything a producer needs to agree to. Three fields are
@@ -148,3 +207,6 @@ suite needs neither a Zizq server nor a network.
 | `START_WEB` | `1` | `0` to run worker-only |
 | `START_WORKER` | `1` | `0` to run web-only |
 | `AUDIT_QUEUE` | `audit` | Queue `mix simulate` writes to |
+| `ZIZQ_TLS_CA` | unset | CA to verify the server against |
+| `ZIZQ_TLS_CLIENT_CERT` | unset | Client certificate for mutual TLS |
+| `ZIZQ_TLS_CLIENT_KEY` | unset | Its private key |

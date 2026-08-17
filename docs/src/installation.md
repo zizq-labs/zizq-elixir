@@ -12,7 +12,7 @@ package. Add it to your dependencies:
 > ```elixir
 > def deps do
 >   [
->     {:zizq, "~> 0.6.0"}
+>     {:zizq, "~> 0.6.1"}
 >   ]
 > end
 > ```
@@ -128,6 +128,9 @@ different servers, or using different formats — without ambiguity:
   the timeout only has to exceed that interval. Defaults to `30_000`, ten
   times the server's own default heartbeat of three seconds.
 
+- **`:tls`** — certificates for connecting over HTTPS. See
+  [TLS and mutual TLS](#tls-and-mutual-tls) below.
+
 > [!WARNING]
 > If you run the server with a longer heartbeat interval, raise
 > `:stream_idle_timeout` to match. A timeout shorter than the heartbeat would
@@ -135,6 +138,80 @@ different servers, or using different formats — without ambiguity:
 
 Options are validated when the client starts, so a malformed URL or an unknown
 format fails at boot rather than on the first request.
+
+## TLS and mutual TLS
+
+An `https://` URL needs no configuration. Connections verify against the
+system's trust store, with `verify_peer` on:
+
+> Elixir:
+>
+> ```elixir
+> {Zizq, name: MyApp.Zizq, url: "https://zizq.example.com"}
+> ```
+
+`:tls` is for the two cases that store cannot cover: a server whose
+certificate was issued by a **private CA**, and a server that demands a
+**client certificate**.
+
+> Elixir:
+>
+> ```elixir
+> {Zizq,
+>  name: MyApp.Zizq,
+>  url: "https://zizq.internal:7890",
+>  tls: [
+>    ca: "/etc/zizq/ca.pem",
+>    client_cert: "/etc/zizq/client.pem",
+>    client_key: "/etc/zizq/client-key.pem"
+>  ]}
+> ```
+
+- **`:ca`** — verify the server against this authority instead of the system
+  trust store. Use it for a certificate the system would not otherwise trust.
+- **`:client_cert`** and **`:client_key`** — the identity to present for
+  mutual TLS. Both are needed; either alone is rejected at boot, because a
+  certificate with no key presents nothing and a key with no certificate has
+  nothing to present.
+
+> [!NOTE]
+> Mutual TLS requires a Zizq [pro license](https://zizq.io/pricing) on the
+> server.
+
+### PEM contents or a path
+
+Every value may be the PEM text itself or a path to a file holding it, told
+apart by the `-----BEGIN` header. That suits both a mounted secret and one
+read from the environment:
+
+> Elixir:
+>
+> ```elixir
+> tls: [
+>   ca: System.fetch_env!("ZIZQ_CA_PEM"),
+>   client_cert: System.fetch_env!("ZIZQ_CLIENT_CERT_PEM"),
+>   client_key: System.fetch_env!("ZIZQ_CLIENT_KEY_PEM")
+> ]
+> ```
+
+A `:ca` holding several certificates is used whole, so an intermediate chain
+in one file works. The same is true of `:client_cert`, for a leaf plus its
+chain.
+
+An **encrypted** private key cannot be given as PEM text, since there is
+nowhere to put the passphrase. Pass a path instead.
+
+### Both connections are covered
+
+A client opens two kinds of connection: the pooled HTTP/2 one that carries
+requests, and the separate HTTP/1.1 one a worker's stream owns. `:tls` applies
+to both, so a worker is not quietly exempt from the verification the rest of
+the client does.
+
+Configuration is checked at boot — a missing file, a certificate without its
+key, or `:tls` on an `http://` URL fails when the client starts, rather than
+as a handshake error on the first request, where the cause is several layers
+away from the mistake.
 
 ## Checking the connection
 

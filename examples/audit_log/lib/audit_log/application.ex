@@ -25,7 +25,10 @@ defmodule AuditLog.Application do
       Logger.info("[audit_log] worker draining #{AuditLog.Jobs.queue()}")
 
       [
-        {Zizq, name: AuditLog.Zizq, url: Application.fetch_env!(:audit_log, :zizq_url)},
+        {Zizq,
+         name: AuditLog.Zizq,
+         url: Application.fetch_env!(:audit_log, :zizq_url),
+         tls: Application.get_env(:audit_log, :zizq_tls, [])},
         {Zizq.Worker,
          client: AuditLog.Zizq,
          queues: [AuditLog.Jobs.queue()],

@@ -36,7 +36,7 @@ defmodule Mix.Tasks.Simulate do
     count = count!(args)
 
     {:ok, _} = Application.ensure_all_started(:zizq)
-    {:ok, _} = Zizq.start_link(name: @client, url: url())
+    {:ok, _} = Zizq.start_link(name: @client, url: url(), tls: tls())
 
     # One request for the lot, rather than N — the same reason any
     # producer would batch.
@@ -60,7 +60,14 @@ defmodule Mix.Tasks.Simulate do
     end
   end
 
-  defp url, do: System.get_env("ZIZQ_URL") || "http://127.0.0.1:7890"
+  # Read from the application environment rather than the environment
+  # directly. `@requirements ["app.config"]` has already evaluated
+  # `config/runtime.exs`, so this producer connects exactly the way the
+  # app does — including TLS. Re-reading `System.get_env/1` here is how
+  # this task ended up ignoring the certificates the app was using.
+  defp url, do: Application.fetch_env!(:audit_log, :zizq_url)
+
+  defp tls, do: Application.get_env(:audit_log, :zizq_tls, [])
 
   defp queue, do: System.get_env("AUDIT_QUEUE") || AuditLog.Jobs.queue()
 

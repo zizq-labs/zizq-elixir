@@ -90,7 +90,9 @@ defmodule Zizq do
     [
       protocols: [:http2],
       count: config.pool_count,
-      conn_opts: [transport_opts: [timeout: config.connect_timeout]]
+      # TLS material, when configured, rides on the same transport
+      # options as the connect timeout.
+      conn_opts: [transport_opts: [timeout: config.connect_timeout] ++ config.ssl_opts]
     ]
   end
 

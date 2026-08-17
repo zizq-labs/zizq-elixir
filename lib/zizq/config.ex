@@ -70,6 +70,41 @@ defmodule Zizq.Config do
       heartbeat would reconnect a perfectly healthy connection on a
       loop.
       """
+    ],
+    tls: [
+      type: :keyword_list,
+      default: [],
+      keys: [
+        ca: [type: :string],
+        client_cert: [type: :string],
+        client_key: [type: :string]
+      ],
+      doc: """
+      Certificates for connecting over HTTPS.
+
+        * `:ca` — the certificate authority to verify the server
+          against. Pins verification to this CA instead of the
+          system's trust store.
+        * `:client_cert` and `:client_key` — the client identity to
+          present for **mutual TLS**. Both are needed together.
+
+      Each value may be the PEM contents or a path to a PEM file.
+
+          {Zizq,
+           name: MyApp.Zizq,
+           url: "https://zizq.internal:7890",
+           tls: [
+             ca: "/etc/zizq/ca.pem",
+             client_cert: "/etc/zizq/client.pem",
+             client_key: "/etc/zizq/client-key.pem"
+           ]}
+
+      HTTPS works without this — connections verify against the
+      system trust store by default. It is only needed to pin a
+      private CA or to present a client certificate.
+
+      Mutual TLS requires a Zizq Pro licence on the server.
+      """
     ]
   ]
 
@@ -81,7 +116,8 @@ defmodule Zizq.Config do
           pool_count: pos_integer(),
           connect_timeout: timeout(),
           receive_timeout: timeout(),
-          stream_idle_timeout: timeout()
+          stream_idle_timeout: timeout(),
+          ssl_opts: keyword()
         }
 
   defstruct [
@@ -95,7 +131,12 @@ defmodule Zizq.Config do
     :pool_count,
     :connect_timeout,
     :receive_timeout,
-    :stream_idle_timeout
+    :stream_idle_timeout,
+    # Erlang `:ssl` options derived from `:tls`, ready to append to
+    # whichever transport is being opened. Both the pooled requests and
+    # the take stream need them, and they are built once here so the
+    # two cannot drift.
+    ssl_opts: []
   ]
 
   @doc false
@@ -111,6 +152,13 @@ defmodule Zizq.Config do
   def new!(opts) do
     opts = NimbleOptions.validate!(opts, @schema)
     name = Keyword.fetch!(opts, :name)
+    uri = normalise_uri!(Keyword.fetch!(opts, :url))
+
+    ssl_opts =
+      opts
+      |> Keyword.fetch!(:tls)
+      |> Zizq.TLS.validate!(uri)
+      |> Zizq.TLS.to_ssl_options()
 
     %__MODULE__{
       name: name,
@@ -118,13 +166,14 @@ defmodule Zizq.Config do
       # scheme, host and port separately for `Mint.HTTP.connect/4`, and
       # `Finch.build/5` accepts a `URI` directly — passing one skips
       # the `URI.parse/1` it would otherwise run on every request.
-      uri: normalise_uri!(Keyword.fetch!(opts, :url)),
+      uri: uri,
       codec: Zizq.Codec.fetch!(Keyword.fetch!(opts, :format)),
       finch_name: Module.concat(name, Finch),
       pool_count: Keyword.fetch!(opts, :pool_count),
       connect_timeout: Keyword.fetch!(opts, :connect_timeout),
       receive_timeout: Keyword.fetch!(opts, :receive_timeout),
-      stream_idle_timeout: Keyword.fetch!(opts, :stream_idle_timeout)
+      stream_idle_timeout: Keyword.fetch!(opts, :stream_idle_timeout),
+      ssl_opts: ssl_opts
     }
   end
 

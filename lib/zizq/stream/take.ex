@@ -171,7 +171,9 @@ defmodule Zizq.Stream.Take do
              # per-frame overhead is cost with no multiplexing benefit
              # to offset it. Everything else the client does is h2c.
              protocols: [:http1],
-             transport_opts: [timeout: state.config.connect_timeout]
+             # The stream opens its own connection rather than using the
+             # pool, so the TLS material has to be applied here too.
+             transport_opts: [timeout: state.config.connect_timeout] ++ state.config.ssl_opts
            ),
          {:ok, conn, ref} <- Mint.HTTP.request(conn, "GET", path(state), headers(state), nil) do
       # `:connected` waits for the 200 below rather than firing here.

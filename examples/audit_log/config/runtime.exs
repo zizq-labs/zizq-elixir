@@ -27,8 +27,19 @@ if config_env() != :test do
   config :audit_log, AuditLog.Repo,
     database: System.get_env("DATABASE_PATH") || "storage/#{config_env()}.sqlite3"
 
+  # TLS is opt-in: set none of these and the client connects exactly as
+  # it did before. Each may be the PEM contents or a path to a file.
+  zizq_tls =
+    [
+      ca: System.get_env("ZIZQ_TLS_CA"),
+      client_cert: System.get_env("ZIZQ_TLS_CLIENT_CERT"),
+      client_key: System.get_env("ZIZQ_TLS_CLIENT_KEY")
+    ]
+    |> Enum.reject(fn {_key, value} -> value in [nil, ""] end)
+
   config :audit_log,
     zizq_url: System.get_env("ZIZQ_URL") || "http://127.0.0.1:7890",
+    zizq_tls: zizq_tls,
     worker_concurrency: String.to_integer(System.get_env("ZIZQ_WORKER_CONCURRENCY") || "25"),
     web_port: String.to_integer(System.get_env("PORT") || "3000"),
     # Web and worker are separate roles so they can be scaled

@@ -60,6 +60,10 @@ echo "Bumping version: ${CURRENT} -> ${NEW}"
 sed -i "0,/^\([[:space:]]*\)@version \"${CURRENT}\"/s//\1@version \"${NEW}\"/" mix.exs
 echo "  Updated mix.exs"
 
+# Update docs
+sed -i "s/\"~> ${CURRENT}\"/\"~> ${NEW}\"/" docs/src/installation.md
+sed -i "s/\"~> ${CURRENT}\"/\"~> ${NEW}\"/" README.md
+
 # Add a new CHANGELOG section if it doesn't already exist.
 CHANGELOG="CHANGELOG.md"
 if [ -f "$CHANGELOG" ] && ! grep -q "^## ${NEW}$" "$CHANGELOG" 2>/dev/null; then

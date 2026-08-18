@@ -156,8 +156,6 @@ defmodule Zizq.Integration.CronTest do
              ["b", "c"]
   end
 
-  # Per entry, and it survives the round trip — which is exactly what
-  # a group-level default could not do.
   test "an entry's timezone round-trips", ctx do
     install!(ctx, [
       entry(ctx, "a"),
@@ -168,6 +166,60 @@ defmodule Zizq.Integration.CronTest do
 
     assert Enum.find(entries, &(&1.name == "a")).timezone == nil
     assert Enum.find(entries, &(&1.name == "b")).timezone == "Australia/Melbourne"
+  end
+
+  # The group's timezone comes back as the group's, rather than
+  # smeared across the entries — the whole reason it is a group field
+  # and not something the client fans out.
+  test "the group's timezone round-trips, and entries keep their own", ctx do
+    install!(
+      ctx,
+      [entry(ctx, "a"), entry(ctx, "b", timezone: "Europe/Rome")],
+      timezone: "Australia/Melbourne"
+    )
+
+    fetched = Zizq.get_cron!(ctx.group, :cron)
+
+    assert fetched.timezone == "Australia/Melbourne"
+    assert Enum.find(fetched.entries, &(&1.name == "a")).timezone == nil
+    assert Enum.find(fetched.entries, &(&1.name == "b")).timezone == "Europe/Rome"
+  end
+
+  # The scheduling half: the group's timezone is what an inheriting
+  # entry is actually evaluated in, not just something stored.
+  test "an inheriting entry fires on the group's timezone", ctx do
+    utc = install!(ctx, [entry(ctx, "a", expression: "0 9 * * *")], timezone: "UTC")
+    [utc_entry] = utc.entries
+
+    melbourne =
+      install!(ctx, [entry(ctx, "a", expression: "0 9 * * *")], timezone: "Australia/Melbourne")
+
+    [melbourne_entry] = melbourne.entries
+
+    # 9 AM in Melbourne is not 9 AM in UTC, so the same expression has
+    # to resolve to a different instant.
+    assert DateTime.compare(utc_entry.next_enqueue_at, melbourne_entry.next_enqueue_at) != :eq
+
+    # And an entry naming its own timezone ignores the group's.
+    scoped =
+      install!(
+        ctx,
+        [entry(ctx, "a", expression: "0 9 * * *", timezone: "UTC")],
+        timezone: "Australia/Melbourne"
+      )
+
+    [scoped_entry] = scoped.entries
+    assert scoped_entry.next_enqueue_at == utc_entry.next_enqueue_at
+  end
+
+  # A replace is a full replace, so what is left out goes — the same
+  # rule the entries follow.
+  test "omitting the group's timezone clears it", ctx do
+    install!(ctx, [entry(ctx, "a")], timezone: "Australia/Melbourne")
+    assert Zizq.get_cron!(ctx.group, :cron).timezone == "Australia/Melbourne"
+
+    install!(ctx, [entry(ctx, "a")])
+    assert Zizq.get_cron!(ctx.group, :cron).timezone == nil
   end
 
   describe "one entry at a time" do

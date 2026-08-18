@@ -1,5 +1,34 @@
 # Changelog
 
+## 0.7.0 (Unreleased)
+
+### Added
+
+- **A group-level cron timezone.** `Zizq.Cron` gains `:timezone`, an
+  IANA name applied to every entry that does not name one of its own:
+
+      Zizq.Cron.new("my_app",
+        timezone: "Australia/Melbourne",
+        entries: [
+          [name: "nightly_cleanup", expression: "0 3 * * *", job: MyApp.Cleanup.new(%{})],
+          [name: "eu_digest", expression: "0 9 * * *", timezone: "Europe/Rome", job: ...]
+        ]
+      )
+      |> Zizq.replace_cron(MyApp.Zizq)
+
+  An entry naming its own timezone still wins, so one schedule can
+  hold entries in several zones. With neither set, the server
+  evaluates the expression in its own local timezone, as before.
+
+  It is stored on the server as the group's timezone rather than
+  copied onto each entry, so a schedule read back with
+  `Zizq.get_cron/2` still carries it and can be replaced unchanged.
+
+  Needs Zizq 0.7.0 or newer on the server. Against an older server the
+  field is ignored and entries relying on it fall back to the server's
+  local timezone.
+
+
 ## 0.6.1
 
 ### Added

@@ -77,8 +77,9 @@ An entry pairs a cron expression with a job to enqueue:
 - **`:expression`** — a cron expression, e.g. `"*/15 * * * *"`.
 - **`:job`** — what to enqueue. An ordinary `Zizq.Enqueue`, so anything you
   can enqueue you can schedule.
-- **`:timezone`** — an IANA name such as `"Australia/Melbourne"`. The
-  server's own timezone when unset.
+- **`:timezone`** — an IANA name such as `"Australia/Melbourne"`. Its group's
+  timezone when unset, or the server's own when the group does not name one
+  either.
 - **`:paused`** — whether the entry starts suspended.
 
 Because the job is an ordinary enqueue, a job module works directly:
@@ -104,14 +105,42 @@ another language):
 
 ### Timezones
 
-Each entry can specify its own timezone. There is currently no group-level
-default.
+Most schedules want one timezone throughout, which is what the group's
+`:timezone` is for. Specify it once, and every entry that does not specify its
+own is evaluated in it:
 
 > Elixir:
 >
 > ```elixir
-> [name: "digest", expression: "0 9 * * *", timezone: "Australia/Melbourne", job: ...]
+> Zizq.Cron.new("my_app",
+>   timezone: "Australia/Melbourne",
+>   entries: [
+>     [name: "nightly_cleanup", expression: "0 3 * * *", job: MyApp.Cleanup.new(%{})],
+>     [name: "digest", expression: "0 9 * * *", job: [type: "digest", queue: "reports"]]
+>   ]
+> )
 > ```
+
+An entry specifying its own timezone uses that instead, so one schedule can
+hold entries in several zones:
+
+> Elixir:
+>
+> ```elixir
+> [name: "eu_digest", expression: "0 9 * * *", timezone: "Europe/Rome", job: ...]
+> ```
+
+With neither set, the server evaluates the expression in its own local
+timezone.
+
+The group's timezone lives on the server as the group's, so a schedule read
+back with `Zizq.get_cron/2` still says where it came from — it is not copied
+onto each entry.
+
+> [!NOTE]
+> A group-level timezone needs Zizq 0.7.0 or newer on the server. Against an
+> older server it is ignored, and entries that rely on it fall back to the
+> server's local timezone.
 
 ## Building a schedule
 
@@ -146,6 +175,7 @@ them one at a time, which suits building a schedule conditionally:
 > {:ok, schedule} = Zizq.get_cron("my_app", MyApp.Zizq)
 >
 > schedule.paused                              #=> false
+> schedule.timezone                            #=> "Australia/Melbourne"
 > Enum.map(schedule.entries, & &1.name)        #=> ["nightly_cleanup", "digest"]
 >
 > entry = Zizq.Cron.entry(schedule, "digest")

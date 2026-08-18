@@ -963,6 +963,22 @@ defmodule Zizq do
       )
       |> Zizq.replace_cron(MyApp.Zizq)
 
+  A schedule that runs in one timezone throughout says so once, on
+  the group, rather than on every entry:
+
+      Zizq.Cron.new("my_app",
+        timezone: "Australia/Melbourne",
+        entries: [
+          [name: "nightly_cleanup",
+           expression: "0 3 * * *",
+           job: MyApp.Cleanup.new(%{})]
+        ]
+      )
+      |> Zizq.replace_cron(MyApp.Zizq)
+
+  An entry specifying its own `:timezone` uses that instead. See
+  `Zizq.Cron` for the whole picture.
+
   It is atomic and idempotent, so every instance of an application can
   run it on boot without coordinating — none of them needs to be the
   one that owns the schedule.
@@ -976,7 +992,7 @@ defmodule Zizq do
   `Zizq.Worker` process receives jobs enqueued via the schedule just
   like any other job.
 
-  Cron needs a Pro licence; without one the server answers 403, which
+  Cron needs a Pro licence; without one the server responds 403, which
   arrives as `%Zizq.Error{reason: :forbidden}`.
   """
   @spec replace_cron(Zizq.Cron.t(), atom()) :: {:ok, Zizq.Cron.t()} | {:error, Zizq.Error.t()}

@@ -50,28 +50,50 @@ defmodule Zizq.Cron do
   ## Fields
 
     * `:name` — the group's name.
-    * `:entries` — the `Zizq.CronEntry` structs it holds. Each names
-      its own `:timezone`; there is no group-level default, because
-      the server has nowhere to keep one and it would be lost the
-      moment a schedule was read back.
+    * `:entries` — the `Zizq.CronEntry` structs it holds.
+    * `:timezone` — an IANA name, e.g. `"Australia/Melbourne"`,
+      applied to every entry that does not specify one of its own. The
+      server's own timezone when unset. Because installing replaces
+      the group whole, leaving it out clears the timezone.
     * `:paused` — whether the whole group is suspended. A paused group
       fires nothing, whatever its entries say. Left `nil`, an existing
       group keeps its current state and a new one starts running.
     * `:paused_at`, `:resumed_at` — when it was last suspended and
       resumed. Read-only.
+
+  ## Timezones
+
+  Most schedules want one timezone throughout, which is what the
+  group's `:timezone` is for:
+
+      Zizq.Cron.new("my_app",
+        timezone: "Australia/Melbourne",
+        entries: [
+          [name: "nightly_cleanup", expression: "0 3 * * *", job: MyApp.Cleanup.new(%{})]
+        ]
+      )
+
+  An entry specifying its own `:timezone` uses that instead, so one
+  schedule can hold entries in several zones. With neither set, the
+  server evaluates the expression in its own local timezone.
+
+  Requires Zizq 0.7.0 or newer on the server. Against an older server
+  the group's timezone is ignored, and entries fall back to the
+  server's local timezone.
   """
 
   alias Zizq.CronEntry
 
   @type t :: %__MODULE__{
           name: String.t() | nil,
+          timezone: String.t() | nil,
           paused: boolean() | nil,
           paused_at: DateTime.t() | nil,
           resumed_at: DateTime.t() | nil,
           entries: [CronEntry.t()]
         }
 
-  defstruct [:name, :paused, :paused_at, :resumed_at, entries: []]
+  defstruct [:name, :timezone, :paused, :paused_at, :resumed_at, entries: []]
 
   @doc """
   Build a schedule.
@@ -79,17 +101,20 @@ defmodule Zizq.Cron do
   ## Options
 
     * `:entries` — `Zizq.CronEntry` structs, keyword lists or maps.
+    * `:timezone` — an IANA name applied to entries that do not specify
+      one of their own.
     * `:paused` — whether the group starts suspended.
   """
   @spec new(String.t(), keyword()) :: t()
   def new(name, opts \\ []) when is_binary(name) do
-    case Keyword.keys(opts) -- [:entries, :paused] do
+    case Keyword.keys(opts) -- [:entries, :timezone, :paused] do
       [] -> :ok
       unknown -> raise ArgumentError, "unknown cron options: #{inspect(unknown)}"
     end
 
     %__MODULE__{
       name: name,
+      timezone: Keyword.get(opts, :timezone),
       paused: Keyword.get(opts, :paused),
       entries: opts |> Keyword.get(:entries, []) |> Enum.map(&CronEntry.new!/1)
     }
@@ -132,19 +157,20 @@ defmodule Zizq.Cron do
   @doc false
   @spec to_wire(t()) :: map()
   def to_wire(%__MODULE__{} = cron) do
-    entries = Enum.map(cron.entries, &CronEntry.to_wire/1)
-
-    case cron.paused do
-      nil -> %{"entries" => entries}
-      paused -> %{"entries" => entries, "paused" => paused}
-    end
+    %{"entries" => Enum.map(cron.entries, &CronEntry.to_wire/1)}
+    |> maybe_put("timezone", cron.timezone)
+    |> maybe_put("paused", cron.paused)
   end
+
+  defp maybe_put(map, _key, nil), do: map
+  defp maybe_put(map, key, value), do: Map.put(map, key, value)
 
   @doc false
   @spec from_wire(map()) :: t()
   def from_wire(wire) do
     %__MODULE__{
       name: wire["name"],
+      timezone: wire["timezone"],
       paused: wire["paused"],
       paused_at: Zizq.Timestamp.from_ms(wire["paused_at"]),
       resumed_at: Zizq.Timestamp.from_ms(wire["resumed_at"]),

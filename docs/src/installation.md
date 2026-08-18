@@ -12,7 +12,7 @@ package. Add it to your dependencies:
 > ```elixir
 > def deps do
 >   [
->     {:zizq, "~> 0.6.1"}
+>     {:zizq, "~> 0.7.0"}
 >   ]
 > end
 > ```

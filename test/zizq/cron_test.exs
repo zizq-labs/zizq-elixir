@@ -201,6 +201,24 @@ defmodule Zizq.CronTest do
                Zizq.Cron.entry(cron, "digest")
     end
 
+    # The reason the timezone belongs on the group rather than on
+    # every entry: it is still there after a round trip.
+    test "a group's timezone survives being read back and replaced" do
+      name = server(200, group(%{"timezone" => "Australia/Melbourne"}))
+
+      assert {:ok, %Zizq.Cron{timezone: "Australia/Melbourne"} = cron} =
+               Zizq.get_cron("my_app", name)
+
+      assert_receive {:request, "GET", _, _}
+
+      cron
+      |> Zizq.Cron.put_entry(name: "nightly", expression: "0 3 * * *", job: [type: "t"])
+      |> Zizq.replace_cron(name)
+
+      assert_receive {:request, "PUT", "/crons/my_app", body}
+      assert body["timezone"] == "Australia/Melbourne"
+    end
+
     test "entry/2 returns nil for a name that is not there" do
       name = server(200, group())
 
@@ -250,11 +268,7 @@ defmodule Zizq.CronTest do
       assert Zizq.Cron.delete_entry(cron, "absent") == cron
     end
 
-    # Per entry, with no group-level default: the server has nowhere
-    # to keep one, so a schedule read back would lose it and entries
-    # added afterwards would quietly fall back to the server's own
-    # timezone.
-    test "each entry carries its own timezone" do
+    test "an entry can carry its own timezone" do
       name = server(200, group())
 
       Zizq.Cron.new("my_app",
@@ -272,10 +286,36 @@ defmodule Zizq.CronTest do
       assert b["timezone"] == "UTC"
     end
 
-    test "a group-level timezone is rejected rather than silently lost" do
-      assert_raise ArgumentError, ~r/unknown cron options/, fn ->
-        Zizq.Cron.new("my_app", timezone: "UTC", entries: [])
-      end
+    # The group's timezone goes to the server as the group's, rather
+    # than being copied onto every entry, so a schedule read back
+    # still says where it came from.
+    test "the group's timezone is sent on the group, not fanned out" do
+      name = server(200, group())
+
+      Zizq.Cron.new("my_app",
+        timezone: "Australia/Melbourne",
+        entries: [
+          [name: "a", expression: "* * * * *", job: [type: "t"]],
+          [name: "b", expression: "* * * * *", timezone: "UTC", job: [type: "t"]]
+        ]
+      )
+      |> Zizq.replace_cron(name)
+
+      assert_receive {:request, "PUT", _, body}
+      assert body["timezone"] == "Australia/Melbourne"
+
+      [a, b] = body["entries"]
+      refute Map.has_key?(a, "timezone")
+      # An entry naming its own keeps it.
+      assert b["timezone"] == "UTC"
+    end
+
+    test "the group's timezone is sent only when given" do
+      name = server(200, group())
+
+      Zizq.replace_cron(Zizq.Cron.new("my_app"), name)
+      assert_receive {:request, "PUT", _, body}
+      refute Map.has_key?(body, "timezone")
     end
 
     # The loop the struct exists for: what comes back can go straight

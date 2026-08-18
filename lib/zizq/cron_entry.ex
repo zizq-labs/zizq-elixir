@@ -14,8 +14,9 @@ defmodule Zizq.CronEntry do
 
     * `:name` — unique within its group.
     * `:expression` — a cron expression, e.g. `"*/15 * * * *"`.
-    * `:timezone` — an IANA name, e.g. `"Australia/Melbourne"`. The
-      server's own timezone when unset.
+    * `:timezone` — an IANA name, e.g. `"Australia/Melbourne"`. Its
+      group's timezone when unset, or the server's own when the group
+      does not specify one either.
     * `:paused` — whether this entry is currently suspended.
     * `:job` — the `Zizq.Enqueue` fired on schedule.
     * `:next_enqueue_at`, `:last_enqueue_at` — when it fires next, and

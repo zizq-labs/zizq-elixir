@@ -6,8 +6,9 @@ on:
   pull_request:
     branches: [main]
 
+# Publishing lives in `release.yml`, so nothing here writes to the repo.
 permissions:
-  contents: write
+  contents: read
 
 env:
   # Elixir/OTP pair used by every job that isn't the version matrix.
@@ -295,72 +296,3 @@ jobs:
             echo "  Examples: ${{ needs.examples.result }}"
             exit 1
           fi
-
-  # --- Publish (main only, requires approval) ---
-
-  publish:
-    name: Publish Release
-    needs: [gate, package]
-    if: github.ref == 'refs/heads/main' && github.event_name == 'push'
-    environment: release
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v7
-
-      - name: Set up BEAM
-        uses: erlef/setup-beam@v1
-        with:
-          elixir-version: ${{ env.ELIXIR_VERSION }}
-          otp-version: ${{ env.OTP_VERSION }}
-
-      # `mix hex.publish` verifies the dependency tree before uploading,
-      # so it fails outright without this — unlike `mix hex.build`,
-      # which the package job gets away with.
-      - name: Fetch dependencies
-        run: mix deps.get
-
-      - name: Download package artifact
-        uses: actions/download-artifact@v8
-        with:
-          name: zizq-elixir-package
-          path: artifacts
-
-      # The irreversible step, so it runs before the GitHub Release
-      # below — a failure then leaves nothing else half-done. Hex allows
-      # a revert only within one hour of publishing.
-      #
-      # Package and docs are published separately, not as one
-      # `mix hex.publish`. Publishing a package is irreversible after
-      # an hour, while docs can be re-uploaded at will — so a docs
-      # failure must not be able to strand a half-published release.
-      # The package goes first for the same reason.
-      - name: Publish to Hex
-        env:
-          HEX_API_KEY: ${{ secrets.HEX_API_KEY }}
-        run: mix hex.publish package --yes
-
-      - name: Publish docs to HexDocs
-        env:
-          HEX_API_KEY: ${{ secrets.HEX_API_KEY }}
-        run: mix hex.publish docs --yes
-
-      # Exact heading match. A `sed` range address would prefix-match
-      # (`## 0.6.0` also matches `## 0.6.0-alpha.2`) *and* restart on
-      # every later match, concatenating several sections into one set
-      # of release notes.
-      - name: Extract release notes from CHANGELOG
-        run: |
-          version=${{ needs.package.outputs.version }}
-          awk -v v="## $version" '$0 == v {f=1; next} /^## / && f {exit} f' \
-            CHANGELOG.md > release-notes.md
-
-      - name: Create GitHub Release
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: |
-          version=${{ needs.package.outputs.version }}
-          gh release create "v${version}" \
-            --title "v${version}" \
-            --notes-file release-notes.md \
-            "artifacts/zizq-${version}.tar" \
-            "artifacts/zizq-${version}.tar.sha256"

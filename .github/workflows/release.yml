@@ -1,0 +1,188 @@
+# Publishing, split out from CI on purpose.
+#
+# A job gated on `environment: release` waits for a reviewer, and GitHub
+# fails that job automatically if nobody approves within 30 days. While
+# publishing lived in `ci.yml` that meant every merge to main left a
+# pending run which eventually failed, turning the README's CI badge red
+# even though every test had passed. The badge tracks `ci.yml`, so
+# moving publishing here keeps it honest: green means the tests pass.
+#
+# Releasing is now a deliberate act rather than something queued by each
+# merge. `mix hex.publish` builds from the source tree, so the checkout
+# below pins the exact commit CI tested rather than main's HEAD.
+name: Release
+
+on:
+  workflow_dispatch:
+    inputs:
+      run_id:
+        description: >-
+          CI run to release from. Leave blank for the most recent
+          successful run on main.
+        required: false
+        type: string
+
+permissions:
+  contents: write
+  # Needed to read the artifacts of another workflow's run.
+  actions: read
+
+concurrency:
+  group: release
+  cancel-in-progress: false
+
+env:
+  # Kept in step with `ci.yml`'s non-matrix jobs.
+  ELIXIR_VERSION: "1.20"
+  OTP_VERSION: "29"
+
+jobs:
+  release:
+    name: Publish Release
+    runs-on: ubuntu-latest
+    environment: release
+    steps:
+      - name: Resolve the CI run
+        id: ci
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          REQUESTED: ${{ inputs.run_id }}
+        run: |
+          set -euo pipefail
+
+          if [ -n "$REQUESTED" ]; then
+            run_id="$REQUESTED"
+          else
+            run_id="$(gh run list --repo "$REPO" \
+                        --workflow ci.yml --branch main \
+                        --status success --limit 1 \
+                        --json databaseId --jq '.[0].databaseId')"
+            if [ -z "$run_id" ] || [ "$run_id" = "null" ]; then
+              echo "No successful CI run found on main." >&2
+              exit 1
+            fi
+            echo "Using the latest successful CI run on main."
+          fi
+
+          read -r conclusion head_sha head_branch < <(
+            gh run view "$run_id" --repo "$REPO" \
+              --json conclusion,headSha,headBranch \
+              --jq '[.conclusion, .headSha, .headBranch] | @tsv'
+          )
+
+          if [ "$conclusion" != "success" ]; then
+            echo "CI run $run_id concluded '$conclusion', refusing to release from it." >&2
+            exit 1
+          fi
+
+          if [ "$head_branch" != "main" ]; then
+            echo "CI run $run_id is from '$head_branch', not main." >&2
+            exit 1
+          fi
+
+          echo "run_id=$run_id" >> "$GITHUB_OUTPUT"
+          echo "sha=$head_sha" >> "$GITHUB_OUTPUT"
+          echo "Releasing from CI run $run_id ($head_sha)."
+
+      # The commit CI tested. `mix hex.publish` packages from this tree,
+      # so this is what actually reaches Hex.
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ steps.ci.outputs.sha }}
+
+      - name: Set up BEAM
+        uses: erlef/setup-beam@v1
+        with:
+          elixir-version: ${{ env.ELIXIR_VERSION }}
+          otp-version: ${{ env.OTP_VERSION }}
+
+      # `mix hex.publish` verifies the dependency tree before uploading,
+      # so it fails outright without this — unlike `mix hex.build`,
+      # which the package job gets away with.
+      - name: Fetch dependencies
+        run: mix deps.get
+
+      - name: Download the package built by that run
+        uses: actions/download-artifact@v8
+        with:
+          name: zizq-elixir-package
+          path: artifacts
+          run-id: ${{ steps.ci.outputs.run_id }}
+          github-token: ${{ github.token }}
+
+      # Read back from the artifact rather than recomputed, so a version
+      # bump merged after the build cannot rename what is published.
+      - name: Read the packaged version
+        id: version
+        run: |
+          set -euo pipefail
+          tar="$(ls artifacts/zizq-*.tar)"
+          version="$(basename "$tar" .tar | sed 's/^zizq-//')"
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          echo "Publishing zizq $version"
+
+      - name: Refuse to release a version that already exists
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          version="${{ steps.version.outputs.version }}"
+
+          if gh release view "v${version}" --repo "${{ github.repository }}" >/dev/null 2>&1; then
+            echo "Release v${version} already exists. Bump the version first." >&2
+            exit 1
+          fi
+
+          if curl -sf "https://hex.pm/api/packages/zizq/releases/${version}" >/dev/null; then
+            echo "zizq ${version} is already on Hex." >&2
+            exit 1
+          fi
+
+      # The irreversible step, so it runs before the GitHub Release
+      # below — a failure then leaves nothing else half-done. Hex allows
+      # a revert only within one hour of publishing.
+      #
+      # Package and docs are published separately, not as one
+      # `mix hex.publish`. Publishing a package is irreversible after
+      # an hour, while docs can be re-uploaded at will — so a docs
+      # failure must not be able to strand a half-published release.
+      # The package goes first for the same reason.
+      - name: Publish to Hex
+        env:
+          HEX_API_KEY: ${{ secrets.HEX_API_KEY }}
+        run: mix hex.publish package --yes
+
+      - name: Publish docs to HexDocs
+        env:
+          HEX_API_KEY: ${{ secrets.HEX_API_KEY }}
+        run: mix hex.publish docs --yes
+
+      # Exact heading match. A `sed` range address would prefix-match
+      # (`## 0.6.0` also matches `## 0.6.0-alpha.2`) *and* restart on
+      # every later match, concatenating several sections into one set
+      # of release notes.
+      - name: Extract release notes from CHANGELOG
+        run: |
+          set -euo pipefail
+          version="${{ steps.version.outputs.version }}"
+          awk -v v="## $version" '$0 == v {f=1; next} /^## / && f {exit} f' \
+            CHANGELOG.md > release-notes.md
+
+          if [ ! -s release-notes.md ]; then
+            echo "No CHANGELOG section found for ${version}." >&2
+            exit 1
+          fi
+
+      - name: Create GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          version="${{ steps.version.outputs.version }}"
+          gh release create "v${version}" \
+            --target "${{ steps.ci.outputs.sha }}" \
+            --title "v${version}" \
+            --notes-file release-notes.md \
+            "artifacts/zizq-${version}.tar" \
+            "artifacts/zizq-${version}.tar.sha256"

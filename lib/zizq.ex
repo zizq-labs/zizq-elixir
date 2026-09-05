@@ -560,9 +560,14 @@ defmodule Zizq do
   @spec list_jobs(keyword(), atom()) :: {:ok, Zizq.JobPage.t()} | {:error, Zizq.Error.t()}
   def list_jobs(opts \\ [], name) when is_atom(name) do
     {page_opts, filters} = Keyword.split(opts, [:limit, :order])
-    params = Zizq.Filter.to_params(filters) ++ page_params(page_opts)
 
-    get_page(name, "/jobs?" <> URI.encode_query(params), Zizq.JobPage)
+    if Zizq.Filter.matches_nothing?(filters) do
+      {:ok, %Zizq.JobPage{jobs: []}}
+    else
+      params = Zizq.Filter.to_params(filters) ++ page_params(page_opts)
+
+      get_page(name, "/jobs?" <> URI.encode_query(params), Zizq.JobPage)
+    end
   end
 
   @doc """
@@ -669,12 +674,17 @@ defmodule Zizq do
   @spec count_jobs(keyword(), atom()) :: {:ok, non_neg_integer()} | {:error, Zizq.Error.t()}
   def count_jobs(filters \\ [], name) when is_atom(name) do
     config = Config.fetch!(name)
-    params = URI.encode_query(Zizq.Filter.to_params(filters))
 
-    case Zizq.HTTP.request(config, :get, "/jobs/count?" <> params) do
-      {:ok, 200, %{"count" => count}} -> {:ok, count}
-      {:ok, status, body} -> {:error, Zizq.Error.from_response(status, body)}
-      {:error, %Zizq.Error{} = error} -> {:error, error}
+    if Zizq.Filter.matches_nothing?(filters) do
+      {:ok, 0}
+    else
+      params = URI.encode_query(Zizq.Filter.to_params(filters))
+
+      case Zizq.HTTP.request(config, :get, "/jobs/count?" <> params) do
+        {:ok, 200, %{"count" => count}} -> {:ok, count}
+        {:ok, status, body} -> {:error, Zizq.Error.from_response(status, body)}
+        {:error, %Zizq.Error{} = error} -> {:error, error}
+      end
     end
   end
 
@@ -755,13 +765,18 @@ defmodule Zizq do
     {where, changes} = split_bulk_opts!(opts)
 
     reject_terminal_statuses!(where, "change")
-    wire = patch_body(changes)
-    params = URI.encode_query(Zizq.Filter.to_params(where))
 
-    case Zizq.HTTP.request(config, :patch, "/jobs?" <> params, wire) do
-      {:ok, 200, %{"patched" => count}} -> {:ok, count}
-      {:ok, status, body} -> {:error, Zizq.Error.from_response(status, body)}
-      {:error, %Zizq.Error{} = error} -> {:error, error}
+    if Zizq.Filter.matches_nothing?(where) do
+      {:ok, 0}
+    else
+      wire = patch_body(changes)
+      params = URI.encode_query(Zizq.Filter.to_params(where))
+
+      case Zizq.HTTP.request(config, :patch, "/jobs?" <> params, wire) do
+        {:ok, 200, %{"patched" => count}} -> {:ok, count}
+        {:ok, status, body} -> {:error, Zizq.Error.from_response(status, body)}
+        {:error, %Zizq.Error{} = error} -> {:error, error}
+      end
     end
   end
 
@@ -819,12 +834,17 @@ defmodule Zizq do
           {:ok, non_neg_integer()} | {:error, Zizq.Error.t()}
   def delete_all_jobs(filters \\ [], name) when is_atom(name) do
     config = Config.fetch!(name)
-    params = URI.encode_query(Zizq.Filter.to_params(filters))
 
-    case Zizq.HTTP.request(config, :delete, "/jobs?" <> params) do
-      {:ok, 200, %{"deleted" => count}} -> {:ok, count}
-      {:ok, status, body} -> {:error, Zizq.Error.from_response(status, body)}
-      {:error, %Zizq.Error{} = error} -> {:error, error}
+    if Zizq.Filter.matches_nothing?(filters) do
+      {:ok, 0}
+    else
+      params = URI.encode_query(Zizq.Filter.to_params(filters))
+
+      case Zizq.HTTP.request(config, :delete, "/jobs?" <> params) do
+        {:ok, 200, %{"deleted" => count}} -> {:ok, count}
+        {:ok, status, body} -> {:error, Zizq.Error.from_response(status, body)}
+        {:error, %Zizq.Error{} = error} -> {:error, error}
+      end
     end
   end
 
@@ -1229,6 +1249,118 @@ defmodule Zizq do
 
   defp budget_path(%Zizq.Budget{key: key}), do: budget_path(key)
   defp budget_path(key) when is_binary(key), do: "/budgets/#{segment(key)}"
+
+  defp jobs_budget_path(key), do: "/jobs/budgets/#{segment(key)}"
+
+  defp bulk_budget(config, method, path, filters, body) do
+    if Zizq.Filter.matches_nothing?(filters) do
+      {:ok, %Zizq.BudgetChange{}}
+    else
+      params = URI.encode_query(Zizq.Filter.to_params(filters))
+
+      case Zizq.HTTP.request(config, method, path <> "?" <> params, body) do
+        {:ok, 200, body} -> {:ok, Zizq.BudgetChange.from_wire(body)}
+        {:ok, status, body} -> {:error, Zizq.Error.from_response(status, body)}
+        {:error, %Zizq.Error{} = error} -> {:error, error}
+      end
+    end
+  end
+
+  @doc """
+  Bind every matching job to a budget, skipping over those already bound
+  to it.
+
+  Takes the same filters `Zizq.Filter` describes. An unfiltered call binds
+  every queued job on the server.
+
+      Zizq.bind_all_jobs_budget([key: "emails", cost: 2], [queue: "emails"], MyApp.Zizq)
+
+  Unlike the single-job form this does not conflict — a bulk operation
+  cannot usefully fail on just one matching member.
+
+  Returns a `Zizq.BudgetChange`, which provides any job IDs that were in
+  flight and so could not be rebound.
+  """
+  @spec bind_all_jobs_budget(
+          Zizq.BudgetBinding.t() | keyword() | map(),
+          keyword(),
+          atom()
+        ) :: {:ok, Zizq.BudgetChange.t()} | {:error, Zizq.Error.t()}
+  def bind_all_jobs_budget(binding, filters \\ [], name) when is_atom(name) do
+    config = Config.fetch!(name)
+    binding = Zizq.BudgetBinding.new!(binding)
+    body = binding |> Zizq.BudgetBinding.to_wire() |> Map.delete("key")
+
+    bulk_budget(config, :post, jobs_budget_path(binding.key), filters, body)
+  end
+
+  @doc """
+  Bind every matching job to a budget, replacing any existing binding
+  to it.
+
+  The binding is replaced whole, so a `:cost` left unset returns to the
+  default of 1 rather than keeping what was there.
+  """
+  @spec rebind_all_jobs_budget(
+          Zizq.BudgetBinding.t() | keyword() | map(),
+          keyword(),
+          atom()
+        ) :: {:ok, Zizq.BudgetChange.t()} | {:error, Zizq.Error.t()}
+  def rebind_all_jobs_budget(binding, filters \\ [], name) when is_atom(name) do
+    config = Config.fetch!(name)
+    binding = Zizq.BudgetBinding.new!(binding)
+    body = binding |> Zizq.BudgetBinding.to_wire() |> Map.delete("key")
+
+    bulk_budget(config, :put, jobs_budget_path(binding.key), filters, body)
+  end
+
+  @doc """
+  Change the cost on an existing binding, across every matching job.
+
+  Jobs not bound to the budget are skipped over. The check that a cost
+  fits inside the budget's capacity is against the budget itself, so it
+  fails the whole call rather than a subset of the selection.
+  """
+  @spec set_all_jobs_budget_cost(String.t(), pos_integer(), keyword(), atom()) ::
+          {:ok, Zizq.BudgetChange.t()} | {:error, Zizq.Error.t()}
+  def set_all_jobs_budget_cost(key, cost, filters \\ [], name)
+      when is_binary(key) and is_integer(cost) and cost > 0 and is_atom(name) do
+    config = Config.fetch!(name)
+
+    bulk_budget(config, :patch, jobs_budget_path(key), filters, %{"cost" => cost})
+  end
+
+  @doc """
+  Unbind one budget from every matching job, leaving other bindings
+  unchanged.
+
+  This is how a budget is drained before it can be deleted, since
+  `delete_budget/2` refuses while anything still draws on it:
+
+      Zizq.unbind_all_jobs_budget("emails", [budgets_key: "emails"], MyApp.Zizq)
+      Zizq.delete_budget("emails", MyApp.Zizq)
+  """
+  @spec unbind_all_jobs_budget(String.t(), keyword(), atom()) ::
+          {:ok, Zizq.BudgetChange.t()} | {:error, Zizq.Error.t()}
+  def unbind_all_jobs_budget(key, filters \\ [], name) when is_binary(key) and is_atom(name) do
+    config = Config.fetch!(name)
+
+    bulk_budget(config, :delete, jobs_budget_path(key), filters, nil)
+  end
+
+  @doc """
+  Unbind *every* budget from every matching job.
+
+  Beware: an unfiltered call strips every job on the server of any
+  budgets it was bound to.
+  """
+  @spec unbind_all_jobs_budgets(keyword(), atom()) ::
+          {:ok, Zizq.BudgetChange.t()} | {:error, Zizq.Error.t()}
+  def unbind_all_jobs_budgets(filters \\ [], name) when is_atom(name) do
+    config = Config.fetch!(name)
+
+    bulk_budget(config, :delete, "/jobs/budgets", filters, nil)
+  end
 
   @doc """
   List every budget defined on the server, with its policy.

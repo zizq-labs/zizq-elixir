@@ -238,6 +238,79 @@ defmodule Zizq.Query do
     end
   end
 
+  @doc """
+  Bind every job the query matches to a budget.
+
+  Jobs already bound to it are skipped over, so this does not conflict
+  the way the single-job form does.
+
+      Zizq.query(MyApp.Zizq)
+      |> Zizq.Query.where(queue: "emails")
+      |> Zizq.Query.bind_budget(key: "stripe", cost: 2)
+
+  See also `Zizq.delete_budget/2`, which removes one outright.
+  """
+  @spec bind_budget(t(), Zizq.BudgetBinding.t() | keyword() | map()) :: Zizq.BudgetChange.t()
+  def bind_budget(%__MODULE__{} = query, binding) do
+    bang!(Zizq.bind_all_jobs_budget(binding, query.filters, query.client))
+  end
+
+  @doc """
+  Bind every matching job to a budget, replacing any existing binding
+  to it.
+
+  The binding is replaced whole.
+  """
+  @spec rebind_budget(t(), Zizq.BudgetBinding.t() | keyword() | map()) :: Zizq.BudgetChange.t()
+  def rebind_budget(%__MODULE__{} = query, binding) do
+    bang!(Zizq.rebind_all_jobs_budget(binding, query.filters, query.client))
+  end
+
+  @doc """
+  Change what an existing binding costs, leaving the binding alone.
+
+  Matching jobs not bound to the budget are skipped over.
+  """
+  @spec set_budget_cost(t(), String.t(), pos_integer()) :: Zizq.BudgetChange.t()
+  def set_budget_cost(%__MODULE__{} = query, key, cost) do
+    bang!(Zizq.set_all_jobs_budget_cost(key, cost, query.filters, query.client))
+  end
+
+  @doc """
+  Unbind one budget from every matching job, leaving their others
+  alone.
+
+  Paired with a `:budgets_key` filter this is how a budget can be
+  drained before deletion:
+
+      Zizq.query(MyApp.Zizq)
+      |> Zizq.Query.where(budgets_key: "emails")
+      |> Zizq.Query.unbind_budget("emails")
+
+      Zizq.delete_budget("emails", MyApp.Zizq)
+  """
+  @spec unbind_budget(t(), String.t()) :: Zizq.BudgetChange.t()
+  def unbind_budget(%__MODULE__{} = query, key) do
+    bang!(Zizq.unbind_all_jobs_budget(key, query.filters, query.client))
+  end
+
+  @doc """
+  Unbind *every* budget from every matching job.
+
+  Beware: on an unfiltered query this strips every job in the server
+  of its budgets.
+  """
+  @spec unbind_all_budgets(t()) :: Zizq.BudgetChange.t()
+  def unbind_all_budgets(%__MODULE__{} = query) do
+    bang!(Zizq.unbind_all_jobs_budgets(query.filters, query.client))
+  end
+
+  # `Zizq.Query` raises rather than returning tuples — `update_all/2`
+  # and `delete_all/1` already do, and a chain reads badly when one
+  # link in it answers differently from the rest.
+  defp bang!({:ok, change}), do: change
+  defp bang!({:error, error}), do: raise(error)
+
   defp batched?(%__MODULE__{limit: limit, page_size: size}), do: limit != nil or size != nil
 
   # Walks the matching jobs a page at a time and acts on each page by

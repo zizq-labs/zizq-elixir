@@ -56,7 +56,8 @@ defmodule Zizq.Enqueue do
           retention: Retention.t() | nil,
           unique_key: String.t() | Zizq.PayloadHasher.t() | nil,
           unique_while: :queued | :active | :exists | nil,
-          batch: BatchConfig.t() | nil
+          batch: BatchConfig.t() | nil,
+          budgets: [Zizq.BudgetBinding.t()]
         }
 
   @enforce_keys [:type]
@@ -71,11 +72,12 @@ defmodule Zizq.Enqueue do
     :unique_key,
     :unique_while,
     :batch,
-    queue: "default"
+    queue: "default",
+    budgets: []
   ]
 
   @keys ~w(type queue payload priority ready_at retry_limit backoff retention
-           unique_key unique_while batch)a
+           unique_key unique_while batch budgets)a
 
   @unique_scopes [:queued, :active, :exists]
 
@@ -90,7 +92,11 @@ defmodule Zizq.Enqueue do
   # accepts the shorthand wherever it is set, and a struct built by
   # hand is no different from one built from a keyword list.
   def new!(%__MODULE__{} = enqueue) do
-    validate!(%{enqueue | unique_key: hasher(enqueue.unique_key)})
+    validate!(%{
+      enqueue
+      | unique_key: hasher(enqueue.unique_key),
+        budgets: bindings!(enqueue.budgets)
+    })
   end
 
   def new!(attrs) do
@@ -117,7 +123,8 @@ defmodule Zizq.Enqueue do
       retention: attrs |> Map.get(:retention) |> maybe(&Retention.new!/1),
       unique_key: attrs |> Map.get(:unique_key) |> hasher(),
       unique_while: Map.get(attrs, :unique_while),
-      batch: attrs |> Map.get(:batch) |> maybe(&BatchConfig.new!/1)
+      batch: attrs |> Map.get(:batch) |> maybe(&BatchConfig.new!/1),
+      budgets: attrs |> Map.get(:budgets, []) |> bindings!()
     }
     |> validate!()
   end
@@ -137,7 +144,8 @@ defmodule Zizq.Enqueue do
         "retention" => e.retention && Retention.to_wire(e.retention),
         "unique_key" => unique_key(e),
         "unique_while" => e.unique_while && Atom.to_string(e.unique_while),
-        "batch" => e.batch && BatchConfig.to_wire(e.batch, e.type, e.payload)
+        "batch" => e.batch && BatchConfig.to_wire(e.batch, e.type, e.payload),
+        "budgets" => budgets_to_wire(e.budgets)
       }
       |> Map.reject(fn {_key, value} -> is_nil(value) end)
 
@@ -146,6 +154,21 @@ defmodule Zizq.Enqueue do
     # `null` is a legitimate payload, so `payload: nil` must still be
     # sent rather than dropped.
     Map.merge(%{"type" => e.type, "queue" => e.queue, "payload" => e.payload}, optional)
+  end
+
+  # An unthrottled job sends nothing rather than an empty array.
+  defp budgets_to_wire([]), do: nil
+  defp budgets_to_wire(bindings), do: Enum.map(bindings, &Zizq.BudgetBinding.to_wire/1)
+
+  defp bindings!(nil), do: []
+
+  defp bindings!(bindings) when is_list(bindings) do
+    Enum.map(bindings, &Zizq.BudgetBinding.new!/1)
+  end
+
+  defp bindings!(other) do
+    raise ArgumentError,
+          "enqueue :budgets must be a list of budget bindings, got #{inspect(other)}"
   end
 
   defp validate!(%__MODULE__{} = e) do

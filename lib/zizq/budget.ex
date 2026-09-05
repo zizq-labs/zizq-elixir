@@ -165,6 +165,44 @@ defmodule Zizq.Budget do
     %{"allocation" => budget.allocation, "strategy" => strategy_to_wire(budget)}
   end
 
+  # Build the body for a merge patch over a budget's policy.
+  #
+  # Only what is provided is sent. There is a distinction between `nil`
+  # and the absence of a field.
+  #
+  # `:burst` is the one field with a meaningful `nil`: passing it
+  # clears the ceiling back to the default value of the `allocation` and
+  # is sent as JSON null. Key presence is what distinguishes that meaning
+  # from just leaving it alone.
+  #
+  # A `nil` type or duration is not valid.
+  @doc false
+  @spec patch_to_wire!(keyword() | map()) :: map()
+  def patch_to_wire!(changes) do
+    changes = Map.new(changes)
+
+    case Map.keys(changes) -- (@write_keys -- [:key]) do
+      [] -> :ok
+      unknown -> raise ArgumentError, "unknown budget keys: #{inspect(unknown)}"
+    end
+
+    if changes == %{} do
+      raise ArgumentError, "a budget patch must name at least one field to change"
+    end
+
+    strategy =
+      %{}
+      |> patch_strategy(changes, :strategy, "type", &patch_kind!/1)
+      |> patch_strategy(changes, :duration, "duration_ms", &patch_duration!/1)
+      |> patch_burst(changes)
+
+    %{}
+    |> maybe_put("allocation", patch_allocation!(changes))
+    |> then(fn body ->
+      if strategy == %{}, do: body, else: Map.put(body, "strategy", strategy)
+    end)
+  end
+
   @doc false
   @spec from_wire(map()) :: t()
   def from_wire(wire) do
@@ -190,13 +228,67 @@ defmodule Zizq.Budget do
     |> maybe_put("burst", budget.burst)
   end
 
-  # An unrecognised kind is passed through rather than raised on, so a
-  # budget created by a newer server can still be read back and written
+  # An unrecognised strategy is passed through rather than raised on, so
+  # a budget created by a newer server can still be read back and written
   # out unchanged instead of being silently rewritten.
   defp strategy_from_wire("time_based"), do: :time_based
   defp strategy_from_wire("while_in_flight"), do: :while_in_flight
   defp strategy_from_wire(other) when is_binary(other), do: String.to_atom(other)
   defp strategy_from_wire(nil), do: nil
+
+  defp patch_strategy(strategy, changes, key, wire_key, cast) do
+    case Map.fetch(changes, key) do
+      :error -> strategy
+      {:ok, value} -> Map.put(strategy, wire_key, cast.(value))
+    end
+  end
+
+  # Tested for presence rather than truth: an explicit `nil` clears the
+  # ceiling and has to reach the server as null, where an absent key
+  # must leave it alone.
+  defp patch_burst(strategy, changes) do
+    if Map.has_key?(changes, :burst) do
+      Map.put(strategy, "burst", patch_burst!(changes[:burst]))
+    else
+      strategy
+    end
+  end
+
+  defp patch_kind!(kind) when kind in @strategies, do: Atom.to_string(kind)
+
+  defp patch_kind!(other) do
+    raise ArgumentError,
+          "budget :strategy must be one of #{inspect(@strategies)}, got #{inspect(other)}"
+  end
+
+  defp patch_duration!(value) when is_integer(value) and value > 0, do: value
+
+  defp patch_duration!(other) do
+    raise ArgumentError,
+          "budget :duration must be a positive integer in milliseconds, got #{inspect(other)}"
+  end
+
+  defp patch_burst!(nil), do: nil
+  defp patch_burst!(value) when is_integer(value) and value > 0, do: value
+
+  defp patch_burst!(other) do
+    raise ArgumentError,
+          "budget :burst must be a positive integer or nil to clear it, got #{inspect(other)}"
+  end
+
+  defp patch_allocation!(changes) do
+    case Map.fetch(changes, :allocation) do
+      :error ->
+        nil
+
+      {:ok, value} when is_integer(value) and value > 0 ->
+        value
+
+      {:ok, other} ->
+        raise ArgumentError,
+              "budget :allocation must be a positive integer, got #{inspect(other)}"
+    end
+  end
 
   defp maybe_put(map, _key, nil), do: map
   defp maybe_put(map, key, value), do: Map.put(map, key, value)

@@ -1,8 +1,29 @@
 # Changelog
 
-## 0.7.0 (Unreleased)
+## 0.7.0
 
 ### Added
+
+- **Budgets** (Pro) — server-side concurrency control and rate
+  limiting. A budget is a named token bucket that jobs must debit
+  tokens from, and a job that cannot afford its cost waits rather
+  than dispatching immediately.
+
+      # A rate limit: 100 dispatches per minute.
+      Zizq.Budget.new!(
+        key: "emails",
+        allocation: 100,
+        strategy: :time_based,
+        duration: :timer.minutes(1)
+      )
+      |> Zizq.define_budget(MyApp.Zizq)
+
+      # A concurrency limit: at most 3 running at once.
+      Zizq.Budget.new!(key: "stripe", allocation: 3, strategy: :while_in_flight)
+      |> Zizq.define_budget(MyApp.Zizq)
+
+  Full details are available at
+  https://zizq.io/docs/clients/elixir/budgets.html
 
 - **A group-level cron timezone.** `Zizq.Cron` gains `:timezone`, an
   IANA name applied to every entry that does not name one of its own:
@@ -27,6 +48,33 @@
   Needs Zizq 0.7.0 or newer on the server. Against an older server the
   field is ignored and entries relying on it fall back to the server's
   local timezone.
+
+### Fixed
+
+- **An empty filter selected everything rather than nothing.** A set
+  filter given `[]` matches no jobs, but it encoded to no query
+  parameter at all — which the server reads as *unfiltered*:
+
+      # before: deleted every job on the server
+      # now:    {:ok, 0}, and no request is made
+      Zizq.delete_all_jobs([queue: []], MyApp.Zizq)
+
+  The distinction matters because the list is usually computed. A
+  `queue: Enum.filter(...)` that comes back empty has to delete
+  nothing, not everything.
+
+  Affects `Zizq.list_jobs/2`, `Zizq.count_jobs/2`,
+  `Zizq.delete_all_jobs/2` and `Zizq.update_all_jobs/2`, along with
+  their `!` twins and the `Zizq.Query` forms that use them. Each now
+  answers its own zero — an empty page, `0`, or an empty
+  `Zizq.BudgetChange` — without sending a request. An empty string
+  counts the same way, since it encodes to the same absent parameter.
+
+  An *absent* filter still matches everything, as before: `queue: nil`
+  and an omitted `:queue` are unchanged. Only "present but empty" moved.
+
+  `Zizq.Filter.matches_nothing?/1` exposes the test, for code that
+  builds filters and wants to decide for itself.
 
 
 ## 0.6.1

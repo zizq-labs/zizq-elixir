@@ -1250,6 +1250,125 @@ defmodule Zizq do
   defp budget_path(%Zizq.Budget{key: key}), do: budget_path(key)
   defp budget_path(key) when is_binary(key), do: "/budgets/#{segment(key)}"
 
+  defp job_budgets_path(job), do: "/jobs/#{job_id(job)}/budgets"
+  defp job_budget_path(job, key), do: job_budgets_path(job) <> "/#{segment(key)}"
+
+  defp job_budget(config, method, path, body) do
+    case Zizq.HTTP.request(config, method, path, body) do
+      {:ok, 200, body} -> {:ok, Zizq.Job.from_wire(body)}
+      {:ok, status, body} -> {:error, Zizq.Error.from_response(status, body)}
+      {:error, %Zizq.Error{} = error} -> {:error, error}
+    end
+  end
+
+  @doc """
+  Bind one job to a budget it is not already bound to.
+
+      Zizq.bind_budget(job, MyApp.Zizq, key: "emails", cost: 2)
+
+  Returns `%Zizq.Error{reason: :conflict}` if the job is already bound
+  to the budget, leaving the existing binding untouched — use
+  `rebind_budget/3` to replace it, or `set_budget_cost/4` to change
+  only what it costs.
+
+  Only queued (`:scheduled`, `:ready`) jobs may be rebound: an in-flight
+  job already debited tokens against its budgets, and terminal jobs are
+  always immutable. Either non-queued state returns
+  `%Zizq.Error{reason: :invalid_request}`.
+
+  Returns the updated job, whose `:budgets` reflect the change.
+  """
+  @spec bind_budget(Zizq.Job.t() | String.t(), atom(), Zizq.BudgetBinding.t() | keyword() | map()) ::
+          {:ok, Zizq.Job.t()} | {:error, Zizq.Error.t()}
+  def bind_budget(job, name, binding) when is_atom(name) do
+    config = Config.fetch!(name)
+    binding = Zizq.BudgetBinding.new!(binding)
+    body = binding |> Zizq.BudgetBinding.to_wire() |> Map.delete("key")
+
+    job_budget(config, :post, job_budget_path(job, binding.key), body)
+  end
+
+  @doc """
+  Bind one job to a budget, replacing any existing binding to it.
+
+  Unlike `bind_budget/3` this never conflicts. The binding is replaced
+  whole.
+  """
+  @spec rebind_budget(
+          Zizq.Job.t() | String.t(),
+          atom(),
+          Zizq.BudgetBinding.t() | keyword() | map()
+        ) :: {:ok, Zizq.Job.t()} | {:error, Zizq.Error.t()}
+  def rebind_budget(job, name, binding) when is_atom(name) do
+    config = Config.fetch!(name)
+    binding = Zizq.BudgetBinding.new!(binding)
+    body = binding |> Zizq.BudgetBinding.to_wire() |> Map.delete("key")
+
+    job_budget(config, :put, job_budget_path(job, binding.key), body)
+  end
+
+  @doc """
+  Change what one job's existing binding costs, leaving the binding
+  itself alone.
+
+  Returns `%Zizq.Error{reason: :not_found}` if the job does is not
+  bound to the budget.
+
+  Returns `%Zizq.Error{reason: :invalid_request}` if the new cost
+  exceeds the budget's `Zizq.Budget.capacity/1`, since the job could
+  then never be dispatched.
+  """
+  @spec set_budget_cost(Zizq.Job.t() | String.t(), atom(), String.t(), pos_integer()) ::
+          {:ok, Zizq.Job.t()} | {:error, Zizq.Error.t()}
+  def set_budget_cost(job, name, key, cost)
+      when is_atom(name) and is_binary(key) and is_integer(cost) and cost > 0 do
+    config = Config.fetch!(name)
+
+    job_budget(config, :patch, job_budget_path(job, key), %{"cost" => cost})
+  end
+
+  @doc """
+  Unbind one budget from a job, leaving its other budgets alone.
+
+  Returns `%Zizq.Error{reason: :not_found}` the job is not bound to it.
+  """
+  @spec unbind_budget(Zizq.Job.t() | String.t(), atom(), String.t()) ::
+          {:ok, Zizq.Job.t()} | {:error, Zizq.Error.t()}
+  def unbind_budget(job, name, key) when is_atom(name) and is_binary(key) do
+    config = Config.fetch!(name)
+
+    job_budget(config, :delete, job_budget_path(job, key), nil)
+  end
+
+  @doc """
+  Unbind every budget from a job, leaving it unthrottled.
+  """
+  @spec unbind_all_budgets(Zizq.Job.t() | String.t(), atom()) ::
+          {:ok, Zizq.Job.t()} | {:error, Zizq.Error.t()}
+  def unbind_all_budgets(job, name) when is_atom(name) do
+    config = Config.fetch!(name)
+
+    job_budget(config, :delete, job_budgets_path(job), nil)
+  end
+
+  @doc """
+  Replace the whole set of budgets bound to a job.
+
+      Zizq.replace_budgets(job, MyApp.Zizq, [[key: "emails", cost: 2]])
+
+  Budgets absent from the list are unbound. Passing `[]` is the same as
+  `unbind_all_budgets/2`.
+  """
+  @spec replace_budgets(Zizq.Job.t() | String.t(), atom(), [
+          Zizq.BudgetBinding.t() | keyword() | map()
+        ]) :: {:ok, Zizq.Job.t()} | {:error, Zizq.Error.t()}
+  def replace_budgets(job, name, bindings) when is_atom(name) and is_list(bindings) do
+    config = Config.fetch!(name)
+    wire = Enum.map(bindings, &(&1 |> Zizq.BudgetBinding.new!() |> Zizq.BudgetBinding.to_wire()))
+
+    job_budget(config, :put, job_budgets_path(job), %{"budgets" => wire})
+  end
+
   defp jobs_budget_path(key), do: "/jobs/budgets/#{segment(key)}"
 
   defp bulk_budget(config, method, path, filters, body) do
@@ -1273,7 +1392,7 @@ defmodule Zizq do
   Takes the same filters `Zizq.Filter` describes. An unfiltered call binds
   every queued job on the server.
 
-      Zizq.bind_all_jobs_budget([key: "emails", cost: 2], [queue: "emails"], MyApp.Zizq)
+      Zizq.bind_all_jobs_budget([key: "emails", cost: 2], MyApp.Zizq, queue: "emails")
 
   Unlike the single-job form this does not conflict — a bulk operation
   cannot usefully fail on just one matching member.
@@ -1283,10 +1402,10 @@ defmodule Zizq do
   """
   @spec bind_all_jobs_budget(
           Zizq.BudgetBinding.t() | keyword() | map(),
-          keyword(),
-          atom()
+          atom(),
+          keyword()
         ) :: {:ok, Zizq.BudgetChange.t()} | {:error, Zizq.Error.t()}
-  def bind_all_jobs_budget(binding, filters \\ [], name) when is_atom(name) do
+  def bind_all_jobs_budget(binding, name, filters \\ []) when is_atom(name) do
     config = Config.fetch!(name)
     binding = Zizq.BudgetBinding.new!(binding)
     body = binding |> Zizq.BudgetBinding.to_wire() |> Map.delete("key")
@@ -1303,10 +1422,10 @@ defmodule Zizq do
   """
   @spec rebind_all_jobs_budget(
           Zizq.BudgetBinding.t() | keyword() | map(),
-          keyword(),
-          atom()
+          atom(),
+          keyword()
         ) :: {:ok, Zizq.BudgetChange.t()} | {:error, Zizq.Error.t()}
-  def rebind_all_jobs_budget(binding, filters \\ [], name) when is_atom(name) do
+  def rebind_all_jobs_budget(binding, name, filters \\ []) when is_atom(name) do
     config = Config.fetch!(name)
     binding = Zizq.BudgetBinding.new!(binding)
     body = binding |> Zizq.BudgetBinding.to_wire() |> Map.delete("key")
@@ -1321,9 +1440,9 @@ defmodule Zizq do
   fits inside the budget's capacity is against the budget itself, so it
   fails the whole call rather than a subset of the selection.
   """
-  @spec set_all_jobs_budget_cost(String.t(), pos_integer(), keyword(), atom()) ::
+  @spec set_all_jobs_budget_cost(String.t(), atom(), pos_integer(), keyword()) ::
           {:ok, Zizq.BudgetChange.t()} | {:error, Zizq.Error.t()}
-  def set_all_jobs_budget_cost(key, cost, filters \\ [], name)
+  def set_all_jobs_budget_cost(key, name, cost, filters \\ [])
       when is_binary(key) and is_integer(cost) and cost > 0 and is_atom(name) do
     config = Config.fetch!(name)
 
@@ -1337,12 +1456,15 @@ defmodule Zizq do
   This is how a budget is drained before it can be deleted, since
   `delete_budget/2` refuses while anything still draws on it:
 
-      Zizq.unbind_all_jobs_budget("emails", [budgets_key: "emails"], MyApp.Zizq)
+      Zizq.unbind_all_jobs_budget("emails", MyApp.Zizq, budgets_key: "emails")
       Zizq.delete_budget("emails", MyApp.Zizq)
+
+  See `clear_all_jobs_budgets/2` to remove every budget rather than
+  one named one.
   """
-  @spec unbind_all_jobs_budget(String.t(), keyword(), atom()) ::
+  @spec unbind_all_jobs_budget(String.t(), atom(), keyword()) ::
           {:ok, Zizq.BudgetChange.t()} | {:error, Zizq.Error.t()}
-  def unbind_all_jobs_budget(key, filters \\ [], name) when is_binary(key) and is_atom(name) do
+  def unbind_all_jobs_budget(key, name, filters \\ []) when is_binary(key) and is_atom(name) do
     config = Config.fetch!(name)
 
     bulk_budget(config, :delete, jobs_budget_path(key), filters, nil)
@@ -1351,12 +1473,17 @@ defmodule Zizq do
   @doc """
   Unbind *every* budget from every matching job.
 
+  Named `clear_` rather than `unbind_` so it cannot be mistaken for
+  `unbind_all_jobs_budget/3`, which removes one named budget. They
+  would otherwise differ by a single letter, and confusing them
+  unthrottles everything rather than one thing.
+
   Beware: an unfiltered call strips every job on the server of any
   budgets it was bound to.
   """
-  @spec unbind_all_jobs_budgets(keyword(), atom()) ::
+  @spec clear_all_jobs_budgets(keyword(), atom()) ::
           {:ok, Zizq.BudgetChange.t()} | {:error, Zizq.Error.t()}
-  def unbind_all_jobs_budgets(filters \\ [], name) when is_atom(name) do
+  def clear_all_jobs_budgets(filters \\ [], name) when is_atom(name) do
     config = Config.fetch!(name)
 
     bulk_budget(config, :delete, "/jobs/budgets", filters, nil)
@@ -1456,9 +1583,9 @@ defmodule Zizq do
   allocation is below a cost already set on a queued job or a cron
   entry.
   """
-  @spec define_budget(Zizq.Budget.t() | keyword() | map(), keyword(), atom()) ::
+  @spec define_budget(Zizq.Budget.t() | keyword() | map(), atom(), keyword()) ::
           {:ok, Zizq.Budget.t()} | {:error, Zizq.Error.t()}
-  def define_budget(budget, opts \\ [], name) when is_atom(name) do
+  def define_budget(budget, name, opts \\ []) when is_atom(name) do
     config = Config.fetch!(name)
     budget = Zizq.Budget.new!(budget)
 
@@ -1475,9 +1602,9 @@ defmodule Zizq do
   @doc """
   Define a budget, raising on failure.
   """
-  @spec define_budget!(Zizq.Budget.t() | keyword() | map(), keyword(), atom()) :: Zizq.Budget.t()
-  def define_budget!(budget, opts \\ [], name) do
-    case define_budget(budget, opts, name) do
+  @spec define_budget!(Zizq.Budget.t() | keyword() | map(), atom(), keyword()) :: Zizq.Budget.t()
+  def define_budget!(budget, name, opts \\ []) do
+    case define_budget(budget, name, opts) do
       {:ok, budget} -> budget
       {:error, error} -> raise error
     end
@@ -1489,7 +1616,7 @@ defmodule Zizq do
   This is a deep JSON merge patch, so e.g. a burst
   can be changed without restating the strategy type and duration:
 
-      Zizq.update_budget("emails", [burst: 5], MyApp.Zizq)
+      Zizq.update_budget("emails", MyApp.Zizq, burst: 5)
 
   ## Options
 
@@ -1504,9 +1631,9 @@ defmodule Zizq do
   Returns `%Zizq.Error{reason: :not_found}` when no budget exists under
   the key.
   """
-  @spec update_budget(Zizq.Budget.t() | String.t(), keyword() | map(), atom()) ::
+  @spec update_budget(Zizq.Budget.t() | String.t(), atom(), keyword() | map()) ::
           {:ok, Zizq.Budget.t()} | {:error, Zizq.Error.t()}
-  def update_budget(budget, changes, name) when is_atom(name) do
+  def update_budget(budget, name, changes) when is_atom(name) do
     config = Config.fetch!(name)
     body = Zizq.Budget.patch_to_wire!(changes)
 
@@ -1520,9 +1647,9 @@ defmodule Zizq do
   @doc """
   Amend a budget, raising on failure.
   """
-  @spec update_budget!(Zizq.Budget.t() | String.t(), keyword() | map(), atom()) :: Zizq.Budget.t()
-  def update_budget!(budget, changes, name) do
-    case update_budget(budget, changes, name) do
+  @spec update_budget!(Zizq.Budget.t() | String.t(), atom(), keyword() | map()) :: Zizq.Budget.t()
+  def update_budget!(budget, name, changes) do
+    case update_budget(budget, name, changes) do
       {:ok, budget} -> budget
       {:error, error} -> raise error
     end

@@ -124,7 +124,7 @@ defmodule Zizq.EmptyFilterTest do
       name = server()
 
       assert {:ok, %BudgetChange{changed: 0, blocked: []}} =
-               Zizq.bind_all_jobs_budget([key: "emails"], [queue: []], name)
+               Zizq.bind_all_jobs_budget([key: "emails"], name, queue: [])
 
       refute_receive {:request, _, _}
     end
@@ -134,7 +134,7 @@ defmodule Zizq.EmptyFilterTest do
       name = server()
 
       assert {:ok, %BudgetChange{changed: 0}} =
-               Zizq.unbind_all_jobs_budgets([budgets_key: []], name)
+               Zizq.clear_all_jobs_budgets([budgets_key: []], name)
 
       refute_receive {:request, _, _}
     end

@@ -252,7 +252,7 @@ defmodule Zizq.Query do
   """
   @spec bind_budget(t(), Zizq.BudgetBinding.t() | keyword() | map()) :: Zizq.BudgetChange.t()
   def bind_budget(%__MODULE__{} = query, binding) do
-    bang!(Zizq.bind_all_jobs_budget(binding, query.filters, query.client))
+    bang!(Zizq.bind_all_jobs_budget(binding, query.client, query.filters))
   end
 
   @doc """
@@ -263,7 +263,7 @@ defmodule Zizq.Query do
   """
   @spec rebind_budget(t(), Zizq.BudgetBinding.t() | keyword() | map()) :: Zizq.BudgetChange.t()
   def rebind_budget(%__MODULE__{} = query, binding) do
-    bang!(Zizq.rebind_all_jobs_budget(binding, query.filters, query.client))
+    bang!(Zizq.rebind_all_jobs_budget(binding, query.client, query.filters))
   end
 
   @doc """
@@ -273,7 +273,7 @@ defmodule Zizq.Query do
   """
   @spec set_budget_cost(t(), String.t(), pos_integer()) :: Zizq.BudgetChange.t()
   def set_budget_cost(%__MODULE__{} = query, key, cost) do
-    bang!(Zizq.set_all_jobs_budget_cost(key, cost, query.filters, query.client))
+    bang!(Zizq.set_all_jobs_budget_cost(key, query.client, cost, query.filters))
   end
 
   @doc """
@@ -291,7 +291,7 @@ defmodule Zizq.Query do
   """
   @spec unbind_budget(t(), String.t()) :: Zizq.BudgetChange.t()
   def unbind_budget(%__MODULE__{} = query, key) do
-    bang!(Zizq.unbind_all_jobs_budget(key, query.filters, query.client))
+    bang!(Zizq.unbind_all_jobs_budget(key, query.client, query.filters))
   end
 
   @doc """
@@ -302,7 +302,7 @@ defmodule Zizq.Query do
   """
   @spec unbind_all_budgets(t()) :: Zizq.BudgetChange.t()
   def unbind_all_budgets(%__MODULE__{} = query) do
-    bang!(Zizq.unbind_all_jobs_budgets(query.filters, query.client))
+    bang!(Zizq.clear_all_jobs_budgets(query.filters, query.client))
   end
 
   # `Zizq.Query` raises rather than returning tuples — `update_all/2`

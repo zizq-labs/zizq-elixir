@@ -152,8 +152,8 @@ defmodule Zizq.BudgetCrudTest do
       assert {:ok, %Budget{}} =
                Zizq.define_budget(
                  [key: "emails", allocation: 200, strategy: :while_in_flight],
-                 [replace: true],
-                 name
+                 name,
+                 replace: true
                )
 
       assert_receive {:request, "PUT", "/budgets/emails", %{"allocation" => 200}}
@@ -176,7 +176,7 @@ defmodule Zizq.BudgetCrudTest do
     test "sends only the field that was named" do
       name = server(200, budget_body())
 
-      assert {:ok, %Budget{}} = Zizq.update_budget("emails", [burst: 5], name)
+      assert {:ok, %Budget{}} = Zizq.update_budget("emails", name, burst: 5)
 
       assert_receive {:request, "PATCH", "/budgets/emails", body}
       assert body == %{"strategy" => %{"burst" => 5}}
@@ -185,7 +185,7 @@ defmodule Zizq.BudgetCrudTest do
     test "an explicit nil burst clears the ceiling" do
       name = server(200, budget_body())
 
-      assert {:ok, %Budget{}} = Zizq.update_budget("emails", [burst: nil], name)
+      assert {:ok, %Budget{}} = Zizq.update_budget("emails", name, burst: nil)
 
       assert_receive {:request, "PATCH", "/budgets/emails", body}
       assert body == %{"strategy" => %{"burst" => nil}}
@@ -195,7 +195,7 @@ defmodule Zizq.BudgetCrudTest do
       name = server(200, budget_body())
 
       assert {:ok, %Budget{}} =
-               Zizq.update_budget("emails", [duration: :timer.seconds(30)], name)
+               Zizq.update_budget("emails", name, duration: :timer.seconds(30))
 
       assert_receive {:request, "PATCH", "/budgets/emails", body}
       assert body == %{"strategy" => %{"duration_ms" => 30_000}}
@@ -204,7 +204,7 @@ defmodule Zizq.BudgetCrudTest do
     test "the allocation sits outside the strategy" do
       name = server(200, budget_body())
 
-      assert {:ok, %Budget{}} = Zizq.update_budget("emails", [allocation: 50], name)
+      assert {:ok, %Budget{}} = Zizq.update_budget("emails", name, allocation: 50)
 
       assert_receive {:request, "PATCH", "/budgets/emails", %{"allocation" => 50}}
     end
@@ -213,7 +213,7 @@ defmodule Zizq.BudgetCrudTest do
       name = server(200, budget_body())
 
       assert {:ok, %Budget{}} =
-               Zizq.update_budget("emails", [strategy: :time_based, duration: 1_000], name)
+               Zizq.update_budget("emails", name, strategy: :time_based, duration: 1_000)
 
       assert_receive {:request, "PATCH", "/budgets/emails", body}
       assert body["strategy"] == %{"type" => "time_based", "duration_ms" => 1_000}
@@ -225,14 +225,14 @@ defmodule Zizq.BudgetCrudTest do
       name = server(404, error_body("budget not found"))
 
       assert {:error, %Zizq.Error{reason: :not_found}} =
-               Zizq.update_budget("nope", [burst: 1], name)
+               Zizq.update_budget("nope", name, burst: 1)
     end
 
     test "an empty patch raises rather than sending nothing" do
       name = server(200, budget_body())
 
       assert_raise ArgumentError, ~r/at least one field/, fn ->
-        Zizq.update_budget("emails", [], name)
+        Zizq.update_budget("emails", name, [])
       end
 
       refute_receive {:request, _, _, _}
@@ -242,7 +242,7 @@ defmodule Zizq.BudgetCrudTest do
       name = server(200, budget_body())
 
       assert_raise ArgumentError, ~r/unknown budget keys/, fn ->
-        Zizq.update_budget("emails", [duration_ms: 1_000], name)
+        Zizq.update_budget("emails", name, duration_ms: 1_000)
       end
     end
   end

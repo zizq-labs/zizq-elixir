@@ -189,7 +189,7 @@ defmodule Zizq.BudgetQueryTest do
       name = server(403, JSON.encode!(%{"error" => "budgets require a Pro license"}))
 
       assert {:error, %Zizq.Error{reason: :forbidden}} =
-               Zizq.bind_all_jobs_budget([key: "stripe"], [], name)
+               Zizq.bind_all_jobs_budget([key: "stripe"], name, [])
     end
 
     # Validation happens before anything is sent.

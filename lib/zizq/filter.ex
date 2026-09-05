@@ -16,6 +16,8 @@ defmodule Zizq.Filter do
     * `:queue` — one queue name, or a list.
     * `:type` — one job type, or a list.
     * `:status` — one status atom, or a list.
+    * `:budgets_key` — one budget key, or a list. Matches a job bound
+      to any of them.
     * `:priority` — a number, a `Range`, or `[min: _, max: _]`.
     * `:ready_at` — the same, over `DateTime`s or milliseconds.
     * `:attempts` — the same, over attempt counts.
@@ -38,11 +40,44 @@ defmodule Zizq.Filter do
   reads as one:
 
       ready_at: [min: DateTime.utc_now()]
+
+  ## Budgets
+
+  `:budgets_key` selects by what a job is bound to, which is useful
+  for finding what is holding a budget in use — `Zizq.delete_budget/2`
+  refuses while anything remains bound:
+
+      Zizq.query(MyApp.Zizq)
+      |> Zizq.Query.where(budgets_key: "emails")
+      |> Zizq.Query.unbind_budget("emails")
   """
 
-  @sets [:id, :queue, :type, :status]
+  @sets [:id, :queue, :type, :status, :budgets_key]
   @ranges [:priority, :ready_at, :attempts]
   @keys @sets ++ @ranges ++ [:filter]
+
+  @doc """
+  Whether these filters can match nothing at all.
+
+  A set filter given an empty list selects no jobs, but omitting it
+  from the query string would select *every* job — so the two must not
+  be confused. Callers check this and answer their own zero rather than
+  sending a request:
+
+      Zizq.delete_all_jobs([queue: []], MyApp.Zizq)   # => {:ok, 0}
+
+  This matters most where the list is computed. `queue: Enum.filter(...)`
+  coming back empty must delete nothing, not everything.
+
+  An empty string counts the same way, since it encodes to the same
+  absent parameter.
+  """
+  @spec matches_nothing?(keyword() | map()) :: boolean()
+  def matches_nothing?(filters) do
+    Enum.any?(filters, fn {key, value} ->
+      key in @sets and not is_nil(value) and is_nil(encode(key, value))
+    end)
+  end
 
   @doc false
   # Encoded as query parameters rather than a body: these are GET
@@ -64,9 +99,16 @@ defmodule Zizq.Filter do
     end
 
     filters
-    |> Enum.map(fn {key, value} -> {key, encode(key, value)} end)
+    |> Enum.map(fn {key, value} -> {param(key), encode(key, value)} end)
     |> Enum.reject(fn {_key, value} -> is_nil(value) end)
   end
+
+  # The server spells this one with a dot, mirroring the `budgets`
+  # array on a job rather than inventing a second name for the same
+  # thing. `budgets.key` is not a writable Elixir keyword, so the
+  # option is `:budgets_key` and the rename happens here.
+  defp param(:budgets_key), do: :"budgets.key"
+  defp param(key), do: key
 
   defp encode(_key, nil), do: nil
 

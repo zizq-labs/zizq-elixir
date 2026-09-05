@@ -188,6 +188,32 @@ back. Both values are milliseconds and both are optional.
 They both have dedicated docs — see [Unique Jobs](./unique-jobs.md) and
 [Batched Jobs](./batched-jobs.md). Both require a Pro-license on the server.
 
+### Budgets
+
+`:budgets` is used to bind the job to one or more named policies that are used
+to throttle throughput either by applying a concurrency limit, or a rate limit,
+both of which are handled server-side, so jobs are only dispatched when they
+are actually permitted to run:
+
+> Elixir:
+>
+> ```elixir
+> use Zizq.JobKind,
+>   type: "send_email",
+>   queue: "emails",
+>   budgets: [[key: "emails", cost: 2]]
+> ```
+
+A budget is a shared pool of tokens, either managed using a `:while_in_flight`
+strategy (at most *N* running at once) or a `:time_based` strategy (a rate
+limit of at most *N* dispatched over a period). The waiting happens entirely on
+the server: a worker never receives a job it is not yet allowed to run, so
+nothing in `perform/1` changes.
+
+See [Concurrency & Rate Limiting](./budgets.md) for the strategies, costs, and
+how to create and manage the budgets themselves. Requires a Pro-license on the
+server.
+
 ### Omitted options track the server
 
 An option you do not set is **left out of the request entirely**, rather than

@@ -34,6 +34,11 @@ defmodule Zizq.MixProject do
         Consuming: [Zizq.Worker, Zizq.Router, Zizq.Stream.Take, Zizq.Worker.Acker],
         Reading: [Zizq.Query, Zizq.Filter, Zizq.JobPage, Zizq.ErrorPage],
         Scheduling: [Zizq.Cron, Zizq.CronEntry],
+        "Concurrency and rate limiting": [
+          Zizq.Budget,
+          Zizq.BudgetBinding,
+          Zizq.BudgetChange
+        ],
         Resources: [
           Zizq.Job,
           Zizq.ErrorRecord,

@@ -1227,6 +1227,203 @@ defmodule Zizq do
   # single segment, and the server permits names holding both.
   defp segment(value), do: URI.encode(value, &URI.char_unreserved?/1)
 
+  defp budget_path(%Zizq.Budget{key: key}), do: budget_path(key)
+  defp budget_path(key) when is_binary(key), do: "/budgets/#{segment(key)}"
+
+  @doc """
+  List every budget defined on the server, with its policy.
+
+  Budgets are a Pro feature. Without a licence the server responds with
+  `%Zizq.Error{reason: :forbidden}`.
+  """
+  @spec list_budgets(atom()) :: {:ok, [Zizq.Budget.t()]} | {:error, Zizq.Error.t()}
+  def list_budgets(name) when is_atom(name) do
+    config = Config.fetch!(name)
+
+    case Zizq.HTTP.request(config, :get, "/budgets") do
+      {:ok, 200, body} -> {:ok, Enum.map(body["budgets"] || [], &Zizq.Budget.from_wire/1)}
+      {:ok, status, body} -> {:error, Zizq.Error.from_response(status, body)}
+      {:error, %Zizq.Error{} = error} -> {:error, error}
+    end
+  end
+
+  @doc """
+  List budgets, raising on failure.
+  """
+  @spec list_budgets!(atom()) :: [Zizq.Budget.t()]
+  def list_budgets!(name) do
+    case list_budgets(name) do
+      {:ok, budgets} -> budgets
+      {:error, error} -> raise error
+    end
+  end
+
+  @doc """
+  Read a single budget's policy.
+
+  Returns `%Zizq.Error{reason: :not_found}` when no budget exists under
+  the key.
+  """
+  @spec get_budget(Zizq.Budget.t() | String.t(), atom()) ::
+          {:ok, Zizq.Budget.t()} | {:error, Zizq.Error.t()}
+  def get_budget(budget, name) when is_atom(name) do
+    config = Config.fetch!(name)
+
+    case Zizq.HTTP.request(config, :get, budget_path(budget)) do
+      {:ok, 200, body} -> {:ok, Zizq.Budget.from_wire(body)}
+      {:ok, status, body} -> {:error, Zizq.Error.from_response(status, body)}
+      {:error, %Zizq.Error{} = error} -> {:error, error}
+    end
+  end
+
+  @doc """
+  Read a budget, raising on failure.
+  """
+  @spec get_budget!(Zizq.Budget.t() | String.t(), atom()) :: Zizq.Budget.t()
+  def get_budget!(budget, name) do
+    case get_budget(budget, name) do
+      {:ok, budget} -> budget
+      {:error, error} -> raise error
+    end
+  end
+
+  @doc """
+  Define a budget.
+
+  Budgets are a Pro feature. Without a licence the server responds with
+  `%Zizq.Error{reason: :forbidden}`.
+
+      Zizq.Budget.new!(
+        key: "emails",
+        allocation: 100,
+        strategy: :time_based,
+        duration: :timer.minutes(1)
+      )
+      |> Zizq.define_budget(MyApp.Zizq)
+
+  By default when one already exists under the key, returns
+  `%Zizq.Error{reason: :conflict}` and leaves the stored policy
+  untouched, so an application declaring its budgets on boot cannot
+  accidentally clobber an existing budget that has since tuned. Every
+  node can call this in a horizontally scaled workload and treat the
+  conflict as success:
+
+      case Zizq.define_budget(budget, MyApp.Zizq) do
+        {:ok, budget} -> {:ok, budget}
+        {:error, %Zizq.Error{reason: :conflict}} -> :already_defined
+        {:error, error} -> {:error, error}
+      end
+
+  ## Options
+
+    * `:replace` — overwrite an existing policy instead of refusing.
+      Never conflicts. A replace changes the policy, not the budget's
+      identity, so `:created_at` survives it.
+
+  Returns `%Zizq.Error{reason: :invalid_request}` if a replacement
+  allocation is below a cost already set on a queued job or a cron
+  entry.
+  """
+  @spec define_budget(Zizq.Budget.t() | keyword() | map(), keyword(), atom()) ::
+          {:ok, Zizq.Budget.t()} | {:error, Zizq.Error.t()}
+  def define_budget(budget, opts \\ [], name) when is_atom(name) do
+    config = Config.fetch!(name)
+    budget = Zizq.Budget.new!(budget)
+
+    {method, expected} =
+      if Keyword.get(opts, :replace, false), do: {:put, 200}, else: {:post, 201}
+
+    case Zizq.HTTP.request(config, method, budget_path(budget), Zizq.Budget.to_wire(budget)) do
+      {:ok, ^expected, body} -> {:ok, Zizq.Budget.from_wire(body)}
+      {:ok, status, body} -> {:error, Zizq.Error.from_response(status, body)}
+      {:error, %Zizq.Error{} = error} -> {:error, error}
+    end
+  end
+
+  @doc """
+  Define a budget, raising on failure.
+  """
+  @spec define_budget!(Zizq.Budget.t() | keyword() | map(), keyword(), atom()) :: Zizq.Budget.t()
+  def define_budget!(budget, opts \\ [], name) do
+    case define_budget(budget, opts, name) do
+      {:ok, budget} -> budget
+      {:error, error} -> raise error
+    end
+  end
+
+  @doc """
+  Amend named fields of a budget's policy, leaving the rest alone.
+
+  This is a deep JSON merge patch, so e.g. a burst
+  can be changed without restating the strategy type and duration:
+
+      Zizq.update_budget("emails", [burst: 5], MyApp.Zizq)
+
+  ## Options
+
+    * `:allocation` — tokens the bucket accommodates when full.
+    * `:strategy` — `:time_based` or `:while_in_flight`.
+    * `:duration` — for `:time_based`, the period, in milliseconds.
+    * `:burst` — for `:time_based`, the ceiling; `nil` clears it back to
+      the allocation.
+
+  `:burst` is the only field with a meaningful `nil`.
+
+  Returns `%Zizq.Error{reason: :not_found}` when no budget exists under
+  the key.
+  """
+  @spec update_budget(Zizq.Budget.t() | String.t(), keyword() | map(), atom()) ::
+          {:ok, Zizq.Budget.t()} | {:error, Zizq.Error.t()}
+  def update_budget(budget, changes, name) when is_atom(name) do
+    config = Config.fetch!(name)
+    body = Zizq.Budget.patch_to_wire!(changes)
+
+    case Zizq.HTTP.request(config, :patch, budget_path(budget), body) do
+      {:ok, 200, body} -> {:ok, Zizq.Budget.from_wire(body)}
+      {:ok, status, body} -> {:error, Zizq.Error.from_response(status, body)}
+      {:error, %Zizq.Error{} = error} -> {:error, error}
+    end
+  end
+
+  @doc """
+  Amend a budget, raising on failure.
+  """
+  @spec update_budget!(Zizq.Budget.t() | String.t(), keyword() | map(), atom()) :: Zizq.Budget.t()
+  def update_budget!(budget, changes, name) do
+    case update_budget(budget, changes, name) do
+      {:ok, budget} -> budget
+      {:error, error} -> raise error
+    end
+  end
+
+  @doc """
+  Delete a budget.
+
+  Responds `%Zizq.Error{reason: :conflict}` while anything remains
+  bound to it.
+  """
+  @spec delete_budget(Zizq.Budget.t() | String.t(), atom()) :: :ok | {:error, Zizq.Error.t()}
+  def delete_budget(budget, name) when is_atom(name) do
+    config = Config.fetch!(name)
+
+    case Zizq.HTTP.request(config, :delete, budget_path(budget)) do
+      {:ok, 204, _body} -> :ok
+      {:ok, status, body} -> {:error, Zizq.Error.from_response(status, body)}
+      {:error, %Zizq.Error{} = error} -> {:error, error}
+    end
+  end
+
+  @doc """
+  Delete a budget, raising on failure.
+  """
+  @spec delete_budget!(Zizq.Budget.t() | String.t(), atom()) :: :ok
+  def delete_budget!(budget, name) do
+    case delete_budget(budget, name) do
+      :ok -> :ok
+      {:error, error} -> raise error
+    end
+  end
+
   @doc """
   Delete every job and every cron schedule on the server.
 
